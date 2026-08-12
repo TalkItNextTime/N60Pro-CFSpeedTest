@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "method": "GET",
+      "path": "/zones",
+      "response": {
+        "status": 200,
+        "json": {
+          "success": true,
+          "errors": [],
+          "result": [
+            {
+              "id": "zone-abc",
+              "name": "domain.com",
+              "status": "active"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

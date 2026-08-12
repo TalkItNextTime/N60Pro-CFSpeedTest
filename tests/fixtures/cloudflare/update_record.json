@@ -1,0 +1,83 @@
+{
+  "rules": [
+    {
+      "method": "GET",
+      "path": "/zones",
+      "response": {
+        "status": 200,
+        "json": {
+          "success": true,
+          "errors": [],
+          "result": [
+            {
+              "id": "zone-abc",
+              "name": "domain.com"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/zones/zone-abc/dns_records",
+      "sequence": [
+        {
+          "status": 200,
+          "json": {
+            "success": true,
+            "errors": [],
+            "result": [
+              {
+                "id": "rec-upd",
+                "type": "A",
+                "name": "szct.domain.com",
+                "content": "9.9.9.9",
+                "proxied": false,
+                "ttl": 1,
+                "zone_id": "zone-abc"
+              }
+            ]
+          }
+        },
+        {
+          "status": 200,
+          "json": {
+            "success": true,
+            "errors": [],
+            "result": [
+              {
+                "id": "rec-upd",
+                "type": "A",
+                "name": "szct.domain.com",
+                "content": "1.2.3.4",
+                "proxied": false,
+                "ttl": 1,
+                "zone_id": "zone-abc"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/zones/zone-abc/dns_records/rec-upd",
+      "response": {
+        "status": 200,
+        "json": {
+          "success": true,
+          "errors": [],
+          "result": {
+            "id": "rec-upd",
+            "type": "A",
+            "name": "szct.domain.com",
+            "content": "1.2.3.4",
+            "proxied": false,
+            "ttl": 1,
+            "zone_id": "zone-abc"
+          }
+        }
+      }
+    }
+  ]
+}

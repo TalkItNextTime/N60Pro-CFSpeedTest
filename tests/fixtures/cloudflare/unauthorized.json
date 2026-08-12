@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "method": "GET",
+      "path": "/user/tokens/verify",
+      "response": {
+        "status": 401,
+        "json": {
+          "success": false,
+          "errors": [
+            {
+              "code": 10000,
+              "message": "Authentication error"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "method": "GET",
+      "path": "/zones",
+      "response": {
+        "status": 403,
+        "json": {
+          "success": false,
+          "errors": [
+            {
+              "code": 10000,
+              "message": "Forbidden"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

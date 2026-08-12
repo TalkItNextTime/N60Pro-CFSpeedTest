@@ -1,0 +1,109 @@
+{
+  "rules": [
+    {
+      "method": "GET",
+      "path": "/zones",
+      "response": {
+        "status": 200,
+        "json": {
+          "success": true,
+          "errors": [],
+          "result": [
+            {
+              "id": "zone-abc",
+              "name": "domain.com"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/zones/zone-abc/dns_records",
+      "sequence": [
+        {
+          "status": 200,
+          "json": {
+            "success": true,
+            "errors": [],
+            "result": []
+          }
+        },
+        {
+          "status": 200,
+          "json": {
+            "success": true,
+            "errors": [],
+            "result": [
+              {
+                "id": "rec-new",
+                "type": "A",
+                "name": "bjcm.domain.com",
+                "content": "1.2.3.4",
+                "proxied": false,
+                "ttl": 1,
+                "zone_id": "zone-abc"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/zones/zone-abc/dns_records",
+      "response": {
+        "status": 200,
+        "json": {
+          "success": true,
+          "errors": [],
+          "result": {
+            "id": "rec-new",
+            "type": "A",
+            "name": "bjcm.domain.com",
+            "content": "1.2.3.4",
+            "proxied": false,
+            "ttl": 1,
+            "zone_id": "zone-abc"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/zones/zone-abc/dns_records/rec-old",
+      "response": {
+        "status": 200,
+        "json": {
+          "success": true,
+          "errors": [],
+          "result": {
+            "id": "rec-old",
+            "type": "A",
+            "name": "szct.domain.com",
+            "content": "8.8.8.8",
+            "proxied": false,
+            "ttl": 1,
+            "zone_id": "zone-abc"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/zones/zone-abc/dns_records/rec-old",
+      "response": {
+        "status": 500,
+        "json": {
+          "success": false,
+          "errors": [
+            {
+              "code": 10000,
+              "message": "delete failed"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

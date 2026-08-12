@@ -1,0 +1,50 @@
+{
+  "rules": [
+    {
+      "method": "GET",
+      "path": "/zones",
+      "response": {
+        "status": 200,
+        "json": {
+          "success": true,
+          "errors": [],
+          "result": [
+            {
+              "id": "zone-abc",
+              "name": "domain.com"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/zones/zone-abc/dns_records",
+      "response": {
+        "status": 200,
+        "json": {
+          "success": true,
+          "errors": [],
+          "result": [
+            {
+              "id": "rec-a",
+              "type": "A",
+              "name": "szct.domain.com",
+              "content": "1.1.1.1",
+              "proxied": false,
+              "ttl": 1
+            },
+            {
+              "id": "rec-b",
+              "type": "A",
+              "name": "szct.domain.com",
+              "content": "2.2.2.2",
+              "proxied": false,
+              "ttl": 1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

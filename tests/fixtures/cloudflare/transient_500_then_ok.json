@@ -1,0 +1,33 @@
+{
+  "rules": [
+    {
+      "method": "GET",
+      "path": "/user/tokens/verify",
+      "sequence": [
+        {
+          "status": 500,
+          "json": {
+            "success": false,
+            "errors": [
+              {
+                "code": 10000,
+                "message": "Internal error"
+              }
+            ]
+          }
+        },
+        {
+          "status": 200,
+          "json": {
+            "success": true,
+            "errors": [],
+            "result": {
+              "id": "token-id-1",
+              "status": "active"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
