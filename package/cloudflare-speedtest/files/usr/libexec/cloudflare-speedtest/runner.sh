@@ -90,6 +90,23 @@ runner_fail() {
     return "$exit_code"
 }
 
+# CFST -f only accepts bare IPv4/CIDR lines; strip comments/blanks defensively.
+runner_prepare_ip_file() {
+    src="$1"
+    dest="$2"
+    [ -f "$src" ] || return 1
+    awk '
+        {
+            sub(/\r$/, "")
+            sub(/#.*/, "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            if ($0 == "") next
+            if ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) print $0
+        }
+    ' "$src" > "$dest"
+    [ -s "$dest" ]
+}
+
 runner_run_cfst() {
     ip_file="$1"
     out_file="$2"
@@ -101,13 +118,24 @@ runner_run_cfst() {
     port="${CFST_PORT:-443}"
     max_latency="${CFST_MAX_LATENCY_MS:-200}"
     max_loss="${CFST_MAX_LOSS_RATIO:-0.2}"
+    test_url="${CFST_TEST_URL:-https://cf.xiu2.xyz/url}"
     timeout="${CFST_TASK_TIMEOUT:-900}"
     if [ -n "${CFST_TASK_TIMEOUT_OVERRIDE:-}" ]; then
         timeout="$CFST_TASK_TIMEOUT_OVERRIDE"
     fi
 
+    prepared_ip="${CFST_TASK_DIR:-/tmp}/ip-prepared.$$"
+    if ! runner_prepare_ip_file "$ip_file" "$prepared_ip"; then
+        rm -f "$prepared_ip"
+        runner_fail CFST_EXEC_FAILED 'IP 列表无效或为空' 53
+        return 53
+    fi
+
+    timed_out_flag="${CFST_TASK_DIR:-/tmp}/cfst-timed-out.$$"
+    rm -f "$timed_out_flag"
+
     nice -n 10 "$CFST_CFST_BIN" \
-        -f "$ip_file" \
+        -f "$prepared_ip" \
         -o "$out_file" \
         -p 0 \
         -n "$threads" \
@@ -116,14 +144,20 @@ runner_run_cfst() {
         -dt "$download_seconds" \
         -tp "$port" \
         -tl "$max_latency" \
-        -tlr "$max_loss" &
+        -tlr "$max_loss" \
+        -url "$test_url" &
     CFST_CHILD_PID=$!
 
-    (
-        ${CFST_SLEEP_CMD:-sleep} "$timeout"
-        kill -TERM "$CFST_CHILD_PID" 2>/dev/null || true
-    ) &
-    CFST_WATCHDOG_PID=$!
+    if [ "${CFST_DISABLE_WATCHDOG:-0}" != "1" ]; then
+        # Always use real sleep for the task watchdog. CFST_SLEEP_CMD is only
+        # for API retry backoff and is stubbed to `true` in host tests.
+        (
+            sleep "$timeout"
+            touch "$timed_out_flag" 2>/dev/null || true
+            kill -TERM "$CFST_CHILD_PID" 2>/dev/null || true
+        ) &
+        CFST_WATCHDOG_PID=$!
+    fi
 
     wait_status=0
     wait "$CFST_CHILD_PID" || wait_status=$?
@@ -135,19 +169,25 @@ runner_run_cfst() {
         CFST_WATCHDOG_PID=''
     fi
 
+    rm -f "$prepared_ip"
+
     if [ "${CFST_CANCELLED:-0}" = "1" ]; then
+        rm -f "$timed_out_flag"
         return 130
     fi
 
     if [ ! -f "$out_file" ] || [ ! -s "$out_file" ]; then
-        if [ "$wait_status" -ne 0 ] || [ -n "${CFST_TASK_TIMEOUT_OVERRIDE:-}" ]; then
+        if [ -f "$timed_out_flag" ]; then
+            rm -f "$timed_out_flag"
             runner_fail CFST_TIMEOUT '测速任务超时' 52
             return 52
         fi
+        rm -f "$timed_out_flag"
         runner_fail CFST_EXEC_FAILED 'cfst 未产生结果文件' 53
         return 53
     fi
 
+    rm -f "$timed_out_flag"
     if [ "$wait_status" -ne 0 ]; then
         # Output exists; continue to validation despite non-zero exit.
         cfst_log warn "cfst exited with status $wait_status; validating output"

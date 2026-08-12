@@ -92,16 +92,14 @@ do
     assert_file_exists "$FILES_ROOT/$rel"
 done
 
-# --- ip.txt: only IPv4 CIDR lines and comments ---
+# --- ip.txt: bare IPv4 CIDR lines only (CFST does not accept comments) ---
 assert_file_exists "$IP_TXT"
 while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-        ''|\#*) continue ;;
+        '') fail 'ip.txt must not contain blank lines' ;;
+        \#*) fail "ip.txt must not contain comments: $line" ;;
     esac
-    # strip trailing comment
-    bare="${line%%#*}"
-    bare="$(printf '%s' "$bare" | sed 's/[[:space:]]*$//')"
-    [ -n "$bare" ] || continue
+    bare="$line"
     case "$bare" in
         *:* )
             fail "ip.txt must not contain IPv6: $bare"
@@ -109,7 +107,7 @@ while IFS= read -r line || [ -n "$line" ]; do
         [0-9]*.[0-9]*.[0-9]*.[0-9]*/[0-9]* )
             ;;
         *)
-            fail "ip.txt line must be IPv4 CIDR or comment: $line"
+            fail "ip.txt line must be IPv4 CIDR: $line"
             ;;
     esac
 done < "$IP_TXT"

@@ -55,7 +55,7 @@ ensure_option test task_timeout_seconds 900
 ensure_option test ip_file '/usr/share/cloudflare-speedtest/ip.txt'
 
 ensure_section geo geo
-ensure_option geo provider_order 'ipapi.co ipwho.is'
+ensure_option geo provider_order 'ipwho.is ipapi.co'
 ensure_option geo request_timeout 8
 ensure_option geo cache_ttl_hours 72
 

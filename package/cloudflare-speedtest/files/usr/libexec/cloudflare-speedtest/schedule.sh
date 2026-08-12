@@ -20,7 +20,37 @@ schedule_now() {
 
 schedule_minute() {
     hostname="$1"
-    printf '%s' "$hostname" | cksum | awk '{ print $1 % 60 }'
+    # Prefer cksum when available (host tests / full BusyBox); fall back for
+    # minimal OpenWrt images that omit cksum but ship md5sum or od.
+    if command -v cksum >/dev/null 2>&1; then
+        printf '%s' "$hostname" | cksum | awk '{ print $1 % 60 }'
+        return 0
+    fi
+    if command -v md5sum >/dev/null 2>&1; then
+        printf '%s' "$hostname" | md5sum | awk '{
+            h = substr($1, 1, 4)
+            n = 0
+            for (i = 1; i <= length(h); i++) {
+                c = substr(h, i, 1)
+                if (c >= "0" && c <= "9") d = c + 0
+                else if (c >= "a" && c <= "f") d = 10 + index("abcdef", c) - 1
+                else if (c >= "A" && c <= "F") d = 10 + index("ABCDEF", c) - 1
+                else d = 0
+                n = n * 16 + d
+            }
+            print n % 60
+        }'
+        return 0
+    fi
+    if command -v od >/dev/null 2>&1; then
+        printf '%s' "$hostname" | od -An -tu1 | awk '{
+            for (i = 1; i <= NF; i++) s += $i
+            print s % 60
+        }'
+        return 0
+    fi
+    # Last resort: fixed offset so cron line is still valid.
+    printf '17\n'
 }
 
 schedule_device_hostname() {

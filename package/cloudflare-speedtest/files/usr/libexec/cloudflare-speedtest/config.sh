@@ -105,7 +105,7 @@ load_config() {
     CFST_TASK_TIMEOUT="$(cfst_config_get test task_timeout_seconds 900)"
     CFST_IP_FILE="$(cfst_config_get test ip_file '/usr/share/cloudflare-speedtest/ip.txt')"
 
-    CFST_GEO_PROVIDERS="$(cfst_config_get geo provider_order 'ipapi.co ipwho.is')"
+    CFST_GEO_PROVIDERS="$(cfst_config_get geo provider_order 'ipwho.is ipapi.co')"
     CFST_GEO_TIMEOUT="$(cfst_config_get geo request_timeout 8)"
     CFST_GEO_CACHE_TTL_HOURS="$(cfst_config_get geo cache_ttl_hours 72)"
 }

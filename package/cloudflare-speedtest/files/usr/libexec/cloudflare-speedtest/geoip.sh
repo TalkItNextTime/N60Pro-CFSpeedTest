@@ -4,7 +4,8 @@
 
 : "${CFST_GEO_TIMEOUT:=8}"
 : "${CFST_GEO_CACHE_TTL_HOURS:=72}"
-: "${CFST_GEO_PROVIDERS:=ipapi.co ipwho.is}"
+# Prefer ipwho.is first: ipapi.co is frequently blocked by Cloudflare challenge pages.
+: "${CFST_GEO_PROVIDERS:=ipwho.is ipapi.co}"
 : "${CFST_TASK_DIR:=/tmp/cloudflare-speedtest}"
 
 set_geo_error() {
@@ -86,7 +87,9 @@ parse_ipapi() {
         "$escaped_ip" "$escaped_city" "$escaped_isp"
 }
 
-# Normalize ipwho.is JSON body. ISP lives under connection.isp.
+# Normalize ipwho.is JSON body.
+# Prefer connection.org over connection.isp: some responses put a street
+# address in isp and the real carrier name in org (e.g. CHINANET ...).
 parse_ipwhois() {
     file="$1"
     [ -f "$file" ] || return 1
@@ -94,7 +97,22 @@ parse_ipwhois() {
     success="$(_json_get "$file" '@.success')"
     ip="$(_json_get "$file" '@.ip')"
     city="$(_json_get "$file" '@.city')"
-    isp="$(_json_get "$file" '@.connection.isp')"
+    org="$(_json_get "$file" '@.connection.org')"
+    isp_field="$(_json_get "$file" '@.connection.isp')"
+    # Prefer org when isp is empty or looks like a postal/street address.
+    case "$isp_field" in
+        ''|*,*|No.*|*[Nn]o\.[0-9]*|*[Ss]treet*|*[Rr]oad*|*[Aa]venue*)
+            if [ -n "$org" ]; then
+                isp="$org"
+            else
+                isp="$isp_field"
+            fi
+            ;;
+        *)
+            isp="$isp_field"
+            [ -n "$isp" ] || isp="$org"
+            ;;
+    esac
     if [ "$success" = "false" ] || [ -z "$ip" ] || [ -z "$city" ] || [ -z "$isp" ]; then
         return 1
     fi

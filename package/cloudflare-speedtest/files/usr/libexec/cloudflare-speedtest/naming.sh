@@ -46,7 +46,21 @@ _lookup_code() {
                 # strip surrounding spaces from alias
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", alias)
                 if (alias == "") continue
-                if (tolower(alias) == needle || alias == needle) {
+                al = tolower(alias)
+                if (al == needle || alias == needle) {
+                    print code
+                    exit 0
+                }
+            }
+            # Substring match for long org strings such as
+            # "CHINANET Guangdong province network". Require alias length
+            # >= 4 to avoid short codes like "ct" matching arbitrarily.
+            for (i = 1; i <= n; i++) {
+                alias = parts[i]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", alias)
+                if (alias == "") continue
+                al = tolower(alias)
+                if (length(al) >= 4 && index(needle, al) > 0) {
                     print code
                     exit 0
                 }

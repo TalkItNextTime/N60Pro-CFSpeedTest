@@ -31,6 +31,6 @@ config test 'test'
         option ip_file '/usr/share/cloudflare-speedtest/ip.txt'
 
 config geo 'geo'
-        option provider_order 'ipapi.co ipwho.is'
+	option provider_order 'ipwho.is ipapi.co'
         option request_timeout '8'
         option cache_ttl_hours '72'

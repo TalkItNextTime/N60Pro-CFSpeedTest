@@ -316,6 +316,7 @@ reset_env() {
     export CFST_MOCK_CFST_FIXTURE="$FIXTURES_R/valid.csv"
     unset CFST_MOCK_CFST_SLEEP CFST_MOCK_CFST_EXIT CFST_MOCK_CFST_REAL_SLEEP
     unset CFST_TASK_TIMEOUT_OVERRIDE CFST_STOP_GRACE_SECONDS
+    export CFST_DISABLE_WATCHDOG=1
     export CFST_SLEEP_CMD='true'
     export CFST_NOW=1700000000
     export CFST_NOW_TEXT='2023-11-14 22:13:20'
@@ -383,6 +384,7 @@ assert_contains "$args" ' -dt 10'
 assert_contains "$args" ' -tp 443'
 assert_contains "$args" ' -tl 200'
 assert_contains "$args" ' -tlr 0.2'
+assert_contains "$args" ' -url https://cf.xiu2.xyz/url'
 # absolute -f and -o
 case "$args" in
     *" -f ${TMP}/share/ip.txt"*|*" -f $TMP/share/ip.txt"*) : ;;
@@ -514,6 +516,7 @@ assert_contains "$persistent" '"id":"rec-new"'
 
 # --- timeout ---
 reset_env
+unset CFST_DISABLE_WATCHDOG
 export CFST_TASK_TIMEOUT_OVERRIDE=1
 export CFST_MOCK_CFST_SLEEP=5
 export CFST_MOCK_CFST_REAL_SLEEP=sleep
@@ -527,6 +530,7 @@ assert_eq "$status" "52"
 st="$(status_text)"
 assert_contains "$st" 'CFST_TIMEOUT'
 unset CFST_TASK_TIMEOUT_OVERRIDE CFST_MOCK_CFST_SLEEP CFST_MOCK_CFST_REAL_SLEEP
+export CFST_DISABLE_WATCHDOG=1
 export CFST_SLEEP_CMD=true
 
 # --- cancellation via stop ---
