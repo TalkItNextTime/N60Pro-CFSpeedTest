@@ -2,3 +2,6 @@
 .claude/settings.local.json
 .tools/
 __pycache__/
+# Task 15 ignores
+/.tmp*
+/out-*.txt
