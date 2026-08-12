@@ -1,0 +1,32 @@
+{
+	"luci-app-cloudflare-speedtest": {
+		"description": "Grant access to Cloudflare SpeedTest status, actions, and package UCI",
+		"read": {
+			"ubus": {
+				"cloudflare-speedtest": [
+					"status",
+					"result",
+					"validate",
+					"logs",
+					"config_summary"
+				]
+			},
+			"uci": [
+				"cloudflare-speedtest"
+			]
+		},
+		"write": {
+			"ubus": {
+				"cloudflare-speedtest": [
+					"start",
+					"stop",
+					"clear_logs",
+					"set_token"
+				]
+			},
+			"uci": [
+				"cloudflare-speedtest"
+			]
+		}
+	}
+}

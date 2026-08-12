@@ -1,15 +1,20 @@
 #!/bin/sh
 set -eu
 
-option="$1"
-[ "$option" = "-q" ] && shift
-command="$1"
+if [ "${1:-}" = "-q" ]; then
+    shift
+fi
+
+command="${1:-}"
+[ -n "$command" ] || exit 1
 shift
+
+uci_file="${CFST_TEST_UCI_FILE:-}"
 
 case "$command" in
     get)
         key="$1"
-        [ -f "${CFST_TEST_UCI_FILE:-}" ] || exit 1
+        [ -f "$uci_file" ] || exit 1
         value="$(awk -F= -v key="$key" '
             $1 == key {
                 sub(/^[^=]*=/, "")
@@ -18,8 +23,59 @@ case "$command" in
                 exit
             }
             END { if (!found) exit 1 }
-        ' "$CFST_TEST_UCI_FILE")" || exit 1
+        ' "$uci_file")" || exit 1
         printf '%s\n' "$value"
+        ;;
+    set)
+        assignment="$1"
+        case "$assignment" in
+            *=*) ;;
+            *) exit 1 ;;
+        esac
+        key="${assignment%%=*}"
+        value="${assignment#*=}"
+        [ -n "$uci_file" ] || exit 1
+        directory="${uci_file%/*}"
+        if [ "$directory" != "$uci_file" ] && [ -n "$directory" ]; then
+            mkdir -p "$directory" 2>/dev/null || true
+        fi
+        touch "$uci_file"
+        tmp="$uci_file.tmp.$$"
+        awk -F= -v key="$key" -v value="$value" '
+            BEGIN { updated = 0 }
+            $1 == key {
+                print key "=" value
+                updated = 1
+                next
+            }
+            { print }
+            END {
+                if (!updated) print key "=" value
+            }
+        ' "$uci_file" > "$tmp"
+        mv -f "$tmp" "$uci_file"
+        ;;
+    delete)
+        key="$1"
+        [ -f "$uci_file" ] || exit 0
+        tmp="$uci_file.tmp.$$"
+        awk -F= -v key="$key" '
+            $1 == key { next }
+            { print }
+        ' "$uci_file" > "$tmp"
+        mv -f "$tmp" "$uci_file"
+        ;;
+    commit)
+        package="${1:-}"
+        [ -n "$package" ] || exit 1
+        log="${CFST_TEST_UCI_COMMIT_LOG:-}"
+        if [ -n "$log" ]; then
+            directory="${log%/*}"
+            if [ "$directory" != "$log" ] && [ -n "$directory" ]; then
+                mkdir -p "$directory" 2>/dev/null || true
+            fi
+            printf '%s\n' "$package" >> "$log"
+        fi
         ;;
     *)
         exit 1

@@ -1,0 +1,352 @@
+#!/bin/sh
+# Constrained rpcd/ubus API for cloudflare-speedtest.
+# Protocol: list | call <method>  (JSON request on stdin for call)
+
+set -eu
+
+: "${CFST_BIN:=/usr/bin/cloudflare-speedtest}"
+: "${CFST_LIB_DIR:=/usr/libexec/cloudflare-speedtest}"
+: "${CFST_RUNTIME_DIR:=/tmp/cloudflare-speedtest}"
+: "${CFST_STATUS_FILE:=$CFST_RUNTIME_DIR/status.json}"
+: "${CFST_STATE_FILE:=/etc/cloudflare-speedtest/state.json}"
+: "${CFST_LOCK_DIR:=$CFST_RUNTIME_DIR/lock}"
+: "${CFST_LOG_FILE:=/var/log/cloudflare-speedtest.log}"
+: "${CFST_UCI_CONFIG:=/etc/config/cloudflare-speedtest}"
+: "${CFST_UCI_PACKAGE:=cloudflare-speedtest}"
+: "${CFST_LOG_RPC_MAX:=65536}"
+
+# Portable JSON via jsonfilter + printf (works on device and host tests without jshn).
+# On device, /usr/share/libubox/jshn.sh may also be present; we intentionally avoid it
+# so host integration tests remain hermetic.
+
+json_escape() {
+    printf '%s' "$1" | awk 'BEGIN { ORS="" }
+        {
+            if (NR > 1) printf "\\n"
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\r/, "\\r")
+            gsub(/\t/, "\\t")
+            printf "%s", $0
+        }'
+}
+
+read_input() {
+    # Read full stdin (request body). Empty body becomes {}.
+    if [ -n "${CFST_RPC_INPUT:-}" ]; then
+        printf '%s' "$CFST_RPC_INPUT"
+        return 0
+    fi
+    _in="$(cat || true)"
+    if [ -z "$_in" ]; then
+        printf '%s' '{}'
+    else
+        printf '%s' "$_in"
+    fi
+}
+
+input_get() {
+    # input_get <expression>  — uses RPC_INPUT
+    jsonfilter -s "$RPC_INPUT" -e "$1" 2>/dev/null || true
+}
+
+input_get_bool() {
+    # Normalize true/1/yes -> true, else empty/false
+    _v="$(input_get "$1")"
+    case "$_v" in
+        true|True|TRUE|1|yes|YES) printf 'true' ;;
+        *) printf 'false' ;;
+    esac
+}
+
+emit_error() {
+    _code="$1"
+    _msg="$2"
+    _esc="$(json_escape "$_msg")"
+    printf '{"error_code":"%s","error_message":"%s"}\n' "$_code" "$_esc"
+}
+
+lock_pid_alive() {
+    _pid="$1"
+    case "$_pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    if [ -n "${CFST_KILL_CMD:-}" ]; then
+        "$CFST_KILL_CMD" -0 "$_pid" 2>/dev/null
+    else
+        kill -0 "$_pid" 2>/dev/null
+    fi
+}
+
+task_is_running() {
+    [ -d "$CFST_LOCK_DIR" ] || return 1
+    _owner=""
+    if [ -f "$CFST_LOCK_DIR/pid" ]; then
+        IFS= read -r _owner < "$CFST_LOCK_DIR/pid" || _owner=""
+    fi
+    lock_pid_alive "$_owner"
+}
+
+cli() {
+    # Invoke CFST_BIN with validated args only (caller must whitelist).
+    "$CFST_BIN" "$@"
+}
+
+rpc_list() {
+    cat <<'EOF'
+{
+  "status": {},
+  "result": {},
+  "start": {
+    "mode": "String"
+  },
+  "stop": {},
+  "validate": {},
+  "logs": {
+    "bytes": "Integer"
+  },
+  "clear_logs": {},
+  "config_summary": {},
+  "set_token": {
+    "token": "String",
+    "clear": "Boolean"
+  }
+}
+EOF
+}
+
+rpc_status() {
+    if [ -f "$CFST_STATUS_FILE" ]; then
+        cat "$CFST_STATUS_FILE"
+    else
+        # Prefer CLI when available for consistent shape
+        if [ -x "$CFST_BIN" ] || command -v "$CFST_BIN" >/dev/null 2>&1; then
+            cli status 2>/dev/null || printf '%s\n' '{"phase":"idle","message":"Idle","updated_at":0}'
+        else
+            printf '%s\n' '{"phase":"idle","message":"Idle","updated_at":0}'
+        fi
+    fi
+}
+
+rpc_result() {
+    if [ -f "$CFST_STATE_FILE" ]; then
+        cat "$CFST_STATE_FILE"
+    else
+        if [ -x "$CFST_BIN" ] || command -v "$CFST_BIN" >/dev/null 2>&1; then
+            cli result 2>/dev/null || printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null}'
+        else
+            printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null}'
+        fi
+    fi
+}
+
+rpc_config_summary() {
+    # Never expose the API token. Only token_configured boolean + non-secret options.
+    _token="$(uci -q get "${CFST_UCI_PACKAGE}.cloudflare.api_token" 2>/dev/null || true)"
+    _token_configured=false
+    if [ -n "$_token" ]; then
+        _token_configured=true
+    fi
+    # Unset local copy immediately
+    _token=''
+
+    _enabled="$(uci -q get "${CFST_UCI_PACKAGE}.main.enabled" 2>/dev/null || printf '1')"
+    _interval="$(uci -q get "${CFST_UCI_PACKAGE}.main.interval_hours" 2>/dev/null || printf '6')"
+    _startup_delay="$(uci -q get "${CFST_UCI_PACKAGE}.main.startup_delay" 2>/dev/null || printf '120')"
+    _log_level="$(uci -q get "${CFST_UCI_PACKAGE}.main.log_level" 2>/dev/null || printf 'info')"
+    _zone="$(uci -q get "${CFST_UCI_PACKAGE}.cloudflare.zone" 2>/dev/null || true)"
+    _ttl="$(uci -q get "${CFST_UCI_PACKAGE}.cloudflare.ttl" 2>/dev/null || printf '1')"
+    _template="$(uci -q get "${CFST_UCI_PACKAGE}.naming.template" 2>/dev/null || printf '{city}{isp}.{zone}')"
+    _auto_detect="$(uci -q get "${CFST_UCI_PACKAGE}.naming.auto_detect" 2>/dev/null || printf '1')"
+    _threads="$(uci -q get "${CFST_UCI_PACKAGE}.test.threads" 2>/dev/null || printf '50')"
+    _port="$(uci -q get "${CFST_UCI_PACKAGE}.test.port" 2>/dev/null || printf '443')"
+
+    # Validate numeric-ish fields are safe for bare JSON numbers; else quote as strings
+    case "$_enabled" in ''|*[!0-9]*) _enabled=0 ;; esac
+    case "$_interval" in ''|*[!0-9]*) _interval=6 ;; esac
+    case "$_startup_delay" in ''|*[!0-9]*) _startup_delay=120 ;; esac
+    case "$_ttl" in ''|*[!0-9]*) _ttl=1 ;; esac
+    case "$_auto_detect" in ''|*[!0-9]*) _auto_detect=1 ;; esac
+    case "$_threads" in ''|*[!0-9]*) _threads=50 ;; esac
+    case "$_port" in ''|*[!0-9]*) _port=443 ;; esac
+
+    _zone_esc="$(json_escape "$_zone")"
+    _log_esc="$(json_escape "$_log_level")"
+    _tpl_esc="$(json_escape "$_template")"
+
+    printf '{"token_configured":%s,"enabled":%s,"interval_hours":%s,"startup_delay":%s,"log_level":"%s","zone":"%s","ttl":%s,"naming_template":"%s","auto_detect":%s,"threads":%s,"port":%s,"proxied":false}\n' \
+        "$_token_configured" \
+        "$_enabled" \
+        "$_interval" \
+        "$_startup_delay" \
+        "$_log_esc" \
+        "$_zone_esc" \
+        "$_ttl" \
+        "$_tpl_esc" \
+        "$_auto_detect" \
+        "$_threads" \
+        "$_port"
+}
+
+rpc_start() {
+    _mode="$(input_get '@.mode')"
+    case "$_mode" in
+        test-only|test-and-update) ;;
+        *)
+            emit_error 'INVALID_MODE' 'mode must be test-only or test-and-update'
+            return 0
+            ;;
+    esac
+
+    if task_is_running; then
+        printf '%s\n' '{"accepted":false,"error_code":"TASK_ALREADY_RUNNING","error_message":"task already running"}'
+        return 0
+    fi
+
+    # Launch asynchronously; do not wait for completion.
+    # Mode is whitelist-validated above — safe to pass as discrete argv.
+    # Trigger is fixed to manual for RPC-originated starts.
+    if [ "$_mode" = "test-only" ]; then
+        "$CFST_BIN" run --mode test-only --trigger manual >/dev/null 2>&1 &
+    else
+        "$CFST_BIN" run --mode test-and-update --trigger manual >/dev/null 2>&1 &
+    fi
+    _pid=$!
+
+    printf '{"accepted":true,"pid":%s}\n' "$_pid"
+}
+
+rpc_stop() {
+    set +e
+    cli stop >/dev/null 2>&1
+    _rc=$?
+    set -e
+    if [ "$_rc" -eq 0 ]; then
+        printf '%s\n' '{"ok":true}'
+    else
+        emit_error 'STOP_FAILED' 'failed to stop task'
+    fi
+}
+
+rpc_validate() {
+    set +e
+    _out="$(cli validate 2>/dev/null)"
+    _rc=$?
+    set -e
+    if [ -n "$_out" ]; then
+        printf '%s\n' "$_out"
+    elif [ "$_rc" -eq 0 ]; then
+        printf '%s\n' '{"valid":true}'
+    else
+        emit_error 'VALIDATE_FAILED' 'validation failed'
+    fi
+}
+
+rpc_logs() {
+    _bytes="$(input_get '@.bytes')"
+    case "$_bytes" in
+        ''|*[!0-9]*) _bytes="$CFST_LOG_RPC_MAX" ;;
+    esac
+    # Cap at CFST_LOG_RPC_MAX
+    if [ "$_bytes" -gt "$CFST_LOG_RPC_MAX" ]; then
+        _bytes="$CFST_LOG_RPC_MAX"
+    fi
+
+    set +e
+    _log="$(cli logs "$_bytes" 2>/dev/null)"
+    set -e
+    _esc="$(json_escape "$_log")"
+    _len="$(printf '%s' "$_log" | wc -c | tr -d ' ')"
+    printf '{"log":"%s","bytes":%s}\n' "$_esc" "$_len"
+}
+
+rpc_clear_logs() {
+    set +e
+    cli clear-logs >/dev/null 2>&1
+    _rc=$?
+    set -e
+    if [ "$_rc" -eq 0 ]; then
+        printf '%s\n' '{"ok":true}'
+    else
+        emit_error 'CLEAR_LOGS_FAILED' 'failed to clear logs'
+    fi
+}
+
+rpc_set_token() {
+    _clear="$(input_get_bool '@.clear')"
+    _token="$(input_get '@.token')"
+
+    if [ "$_clear" = "true" ]; then
+        # Clear token explicitly
+        uci set "${CFST_UCI_PACKAGE}.cloudflare.api_token="
+        uci commit "$CFST_UCI_PACKAGE"
+        if [ -n "$CFST_UCI_CONFIG" ] && [ -e "$CFST_UCI_CONFIG" ]; then
+            chmod 0600 "$CFST_UCI_CONFIG" 2>/dev/null || true
+        fi
+        printf '%s\n' '{"ok":true,"token_configured":false}'
+        return 0
+    fi
+
+    # Missing or empty token => unchanged
+    if [ -z "$_token" ]; then
+        _existing="$(uci -q get "${CFST_UCI_PACKAGE}.cloudflare.api_token" 2>/dev/null || true)"
+        _configured=false
+        [ -n "$_existing" ] && _configured=true
+        _existing=''
+        printf '{"ok":true,"unchanged":true,"token_configured":%s}\n' "$_configured"
+        return 0
+    fi
+
+    # Set new token via uci (never log the value)
+    # Use uci set with key=value form; value must not be interpolated into a larger shell string unsafely.
+    # Passing as a single argv to uci avoids word-splitting of the secret.
+    uci set "${CFST_UCI_PACKAGE}.cloudflare.api_token=${_token}"
+    uci commit "$CFST_UCI_PACKAGE"
+    _token=''
+    if [ -n "$CFST_UCI_CONFIG" ] && [ -e "$CFST_UCI_CONFIG" ]; then
+        chmod 0600 "$CFST_UCI_CONFIG" 2>/dev/null || true
+    fi
+    printf '%s\n' '{"ok":true,"token_configured":true}'
+}
+
+rpc_call() {
+    _method="$1"
+    RPC_INPUT="$(read_input)"
+    export RPC_INPUT
+
+    case "$_method" in
+        status) rpc_status ;;
+        result) rpc_result ;;
+        start) rpc_start ;;
+        stop) rpc_stop ;;
+        validate) rpc_validate ;;
+        logs) rpc_logs ;;
+        clear_logs) rpc_clear_logs ;;
+        config_summary) rpc_config_summary ;;
+        set_token) rpc_set_token ;;
+        *)
+            emit_error 'UNKNOWN_METHOD' "unknown method"
+            ;;
+    esac
+}
+
+main() {
+    case "${1:-}" in
+        list)
+            rpc_list
+            ;;
+        call)
+            [ "$#" -ge 2 ] || {
+                emit_error 'MISSING_METHOD' 'call requires a method name'
+                exit 1
+            }
+            rpc_call "$2"
+            ;;
+        *)
+            printf 'usage: %s list|call <method>\n' "${0##*/}" >&2
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"
