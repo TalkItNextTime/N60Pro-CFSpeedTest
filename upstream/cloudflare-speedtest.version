@@ -1,0 +1,4 @@
+CFST_VERSION='2.3.5'
+CFST_COMMIT='65b43aa58c5f9c7ab8ab83d2d27e35fc00d9cec4'
+CFST_SOURCE_URL='https://codeload.github.com/XIU2/CloudflareSpeedTest/tar.gz/65b43aa58c5f9c7ab8ab83d2d27e35fc00d9cec4'
+CFST_SOURCE_SHA256='ad013a23c54d8c9f54984221fbc6f683fd1fd111575115892ed0dff19d7f1d32'
