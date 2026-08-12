@@ -1,0 +1,2 @@
+#!/bin/sh
+printf '%s\n' "$*" >> "${CFST_TEST_LOGGER_FILE:-/dev/null}"

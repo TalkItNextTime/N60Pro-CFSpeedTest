@@ -1,2 +1,4 @@
 .superpowers/
 .claude/settings.local.json
+.tools/
+__pycache__/

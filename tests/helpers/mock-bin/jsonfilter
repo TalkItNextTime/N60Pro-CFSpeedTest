@@ -1,0 +1,2 @@
+#!/bin/sh
+exec python3 "$CFST_ROOT/tests/helpers/jsonfilter_mock.py" "$@"

@@ -1,0 +1,10 @@
+name: test
+on: [push, pull_request]
+jobs:
+  host-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: make test
+      - run: make shellcheck
