@@ -162,21 +162,13 @@ cmd_clear_logs() {
 
 cmd_apply_schedule() {
     [ "$#" -eq 0 ] || usage_error 'apply-schedule: unexpected arguments'
-    if [ -f "$CFST_LIB_DIR/schedule.sh" ]; then
-        # shellcheck source=/dev/null
-        . "$CFST_LIB_DIR/config.sh"
-        # shellcheck source=/dev/null
-        . "$CFST_LIB_DIR/schedule.sh"
-        load_config
-        if [ "${CFST_ENABLED:-1}" = "1" ]; then
-            write_cron
-        else
-            remove_cron
-        fi
-        return $?
-    fi
-    # Task 10 will provide schedule.sh; succeed as a no-op until then.
-    return 0
+    [ -f "$CFST_LIB_DIR/schedule.sh" ] || usage_error 'apply-schedule: schedule.sh missing'
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/config.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/schedule.sh"
+    load_config
+    apply_schedule
 }
 
 main() {

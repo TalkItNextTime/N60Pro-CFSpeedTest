@@ -1,0 +1,74 @@
+#!/bin/sh
+# First-boot / upgrade-safe defaults for cloudflare-speedtest.
+
+CONFIG=/etc/config/cloudflare-speedtest
+
+ensure_section() {
+	type="$1"
+	name="$2"
+	if ! uci -q get "cloudflare-speedtest.${name}" >/dev/null 2>&1; then
+		uci -q set "cloudflare-speedtest.${name}=${type}" || true
+	fi
+}
+
+ensure_option() {
+	section="$1"
+	option="$2"
+	value="$3"
+	if ! uci -q get "cloudflare-speedtest.${section}.${option}" >/dev/null 2>&1; then
+		uci -q set "cloudflare-speedtest.${section}.${option}=${value}" || true
+	fi
+}
+
+touch "$CONFIG" 2>/dev/null || true
+
+ensure_section main main
+ensure_option main enabled 1
+ensure_option main interval_hours 6
+ensure_option main startup_delay 120
+ensure_option main log_level info
+
+ensure_section cloudflare cloudflare
+ensure_option cloudflare api_token ''
+ensure_option cloudflare zone ''
+ensure_option cloudflare ttl 1
+
+ensure_section naming naming
+ensure_option naming template '{city}{isp}.{zone}'
+ensure_option naming auto_detect 1
+ensure_option naming city_override ''
+ensure_option naming isp_override ''
+ensure_option naming fallback_city ''
+ensure_option naming fallback_isp ''
+
+ensure_section test test
+ensure_option test threads 50
+ensure_option test attempts 4
+ensure_option test download_count 5
+ensure_option test download_seconds 10
+ensure_option test port 443
+ensure_option test test_url 'https://cf.xiu2.xyz/url'
+ensure_option test max_latency_ms 200
+ensure_option test max_loss_ratio 0.2
+ensure_option test min_speed_mbps 0.01
+ensure_option test task_timeout_seconds 900
+ensure_option test ip_file '/usr/share/cloudflare-speedtest/ip.txt'
+
+ensure_section geo geo
+ensure_option geo provider_order 'ipapi.co ipwho.is'
+ensure_option geo request_timeout 8
+ensure_option geo cache_ttl_hours 72
+
+uci -q commit cloudflare-speedtest 2>/dev/null || true
+chmod 0600 "$CONFIG" 2>/dev/null || true
+
+mkdir -p /tmp/cloudflare-speedtest /etc/cloudflare-speedtest 2>/dev/null || true
+
+if [ -x /etc/init.d/cloudflare-speedtest ]; then
+	/etc/init.d/cloudflare-speedtest enable 2>/dev/null || true
+fi
+if [ -x /usr/bin/cloudflare-speedtest ]; then
+	/usr/bin/cloudflare-speedtest apply-schedule 2>/dev/null || true
+fi
+
+exit 0

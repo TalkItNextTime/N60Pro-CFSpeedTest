@@ -1,0 +1,21 @@
+#!/bin/sh
+# WAN ifup hotplug: debounce and schedule a delayed speed-test request.
+
+[ -n "$ACTION" ] || exit 0
+[ -n "$INTERFACE" ] || exit 0
+
+CFST_LIB=/usr/libexec/cloudflare-speedtest
+
+[ -f "$CFST_LIB/schedule.sh" ] || exit 0
+[ -f "$CFST_LIB/config.sh" ] || exit 0
+
+# shellcheck disable=SC1090,SC1091
+. "$CFST_LIB/config.sh"
+# shellcheck disable=SC1090,SC1091
+. "$CFST_LIB/schedule.sh"
+
+load_config 2>/dev/null || true
+[ "${CFST_ENABLED:-1}" = "1" ] || exit 0
+
+hotplug_schedule "$ACTION" "$INTERFACE"
+exit 0

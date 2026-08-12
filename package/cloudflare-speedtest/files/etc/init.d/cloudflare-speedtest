@@ -1,0 +1,45 @@
+#!/bin/sh /etc/rc.common
+# CloudflareSpeedTest service: cron apply, no permanent speed-test process.
+# shellcheck disable=SC2034
+# START/STOP/USE_PROCD are consumed by OpenWrt /etc/rc.common.
+
+START=99
+STOP=10
+USE_PROCD=1
+
+CFST_BIN=/usr/bin/cloudflare-speedtest
+CFST_LIB=/usr/libexec/cloudflare-speedtest
+CFST_RUNTIME=/tmp/cloudflare-speedtest
+CFST_STATE_DIR=/etc/cloudflare-speedtest
+CFST_CONFIG=/etc/config/cloudflare-speedtest
+
+start_service() {
+	mkdir -p "$CFST_RUNTIME" "$CFST_STATE_DIR"
+	if [ -f "$CFST_CONFIG" ]; then
+		chmod 0600 "$CFST_CONFIG" 2>/dev/null || true
+	fi
+	"$CFST_BIN" apply-schedule 2>/dev/null || true
+}
+
+stop_service() {
+	if [ -f "$CFST_LIB/schedule.sh" ]; then
+		# shellcheck disable=SC1090,SC1091
+		. "$CFST_LIB/config.sh"
+		# shellcheck disable=SC1090,SC1091
+		. "$CFST_LIB/schedule.sh"
+		load_config 2>/dev/null || true
+		remove_cron 2>/dev/null || true
+	fi
+	"$CFST_BIN" stop 2>/dev/null || true
+}
+
+reload_service() {
+	if [ -x "$CFST_BIN" ]; then
+		"$CFST_BIN" validate 2>/dev/null || true
+		"$CFST_BIN" apply-schedule 2>/dev/null || true
+	fi
+}
+
+service_triggers() {
+	procd_add_reload_trigger cloudflare-speedtest
+}

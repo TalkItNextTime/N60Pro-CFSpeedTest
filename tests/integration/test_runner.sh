@@ -563,13 +563,21 @@ assert_contains "$st" '"phase":"cancelled"'
 unset CFST_MOCK_CFST_SLEEP CFST_MOCK_CFST_REAL_SLEEP CFST_STOP_GRACE_SECONDS
 export CFST_SLEEP_CMD=true
 
-# --- apply-schedule stub succeeds when schedule.sh missing ---
+# --- apply-schedule writes marked cron line ---
 reset_env
+export CFST_CRONTAB_FILE="$TMP/crontab.root"
+export CFST_CRON_RELOAD_CMD="true"
+export CFST_HOSTNAME=host46
+: > "$CFST_CRONTAB_FILE"
 set +e
 run_cli apply-schedule
 status="$?"
 set -e
 assert_eq "$status" "0"
+cron_text="$(tr -d '\r' < "$CFST_CRONTAB_FILE")"
+assert_contains "$cron_text" '17 */6 * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron'
+assert_contains "$cron_text" 'cloudflare-speedtest'
+unset CFST_CRONTAB_FILE CFST_CRON_RELOAD_CMD CFST_HOSTNAME
 
 # --- status / result / logs read-only smoke ---
 reset_env
