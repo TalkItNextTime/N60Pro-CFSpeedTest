@@ -1,0 +1,51 @@
+#!/bin/sh
+# Host-test mock for /usr/bin/cfst. Copies a fixture to -o and records argv.
+set -eu
+
+log_file="${CFST_MOCK_CFST_LOG:-}"
+if [ -n "$log_file" ]; then
+    directory="${log_file%/*}"
+    if [ "$directory" != "$log_file" ] && [ -n "$directory" ]; then
+        mkdir -p "$directory" 2>/dev/null || true
+    fi
+    {
+        printf 'argv:'
+        for arg in "$@"; do
+            printf ' %s' "$arg"
+        done
+        printf '\n'
+    } >> "$log_file"
+fi
+
+out=""
+prev=""
+for arg in "$@"; do
+    if [ "$prev" = "-o" ]; then
+        out="$arg"
+    fi
+    prev="$arg"
+done
+
+if [ -n "${CFST_MOCK_CFST_SLEEP:-}" ]; then
+    sleep_cmd="${CFST_SLEEP_CMD:-sleep}"
+    # Prefer real sleep for slow-child simulation even if CFST_SLEEP_CMD is stubbed.
+    if [ -n "${CFST_MOCK_CFST_REAL_SLEEP:-}" ]; then
+        sleep_cmd="$CFST_MOCK_CFST_REAL_SLEEP"
+    fi
+    "$sleep_cmd" "$CFST_MOCK_CFST_SLEEP" || true
+fi
+
+if [ -n "${CFST_MOCK_CFST_EXIT:-}" ]; then
+    exit "$CFST_MOCK_CFST_EXIT"
+fi
+
+fixture="${CFST_MOCK_CFST_FIXTURE:-}"
+if [ -n "$fixture" ] && [ -n "$out" ]; then
+    directory="${out%/*}"
+    if [ "$directory" != "$out" ] && [ -n "$directory" ]; then
+        mkdir -p "$directory" 2>/dev/null || true
+    fi
+    cp "$fixture" "$out"
+fi
+
+exit 0

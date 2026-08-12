@@ -1,0 +1,201 @@
+#!/bin/sh
+# shellcheck disable=SC1090,SC1091,SC2034
+# Public command interface for cloudflare-speedtest.
+
+: "${CFST_LIB_DIR:=/usr/libexec/cloudflare-speedtest}"
+: "${CFST_RUNTIME_DIR:=/tmp/cloudflare-speedtest}"
+: "${CFST_STATUS_FILE:=$CFST_RUNTIME_DIR/status.json}"
+: "${CFST_STATE_FILE:=/etc/cloudflare-speedtest/state.json}"
+: "${CFST_LOCK_DIR:=$CFST_RUNTIME_DIR/lock}"
+: "${CFST_LOG_FILE:=/var/log/cloudflare-speedtest.log}"
+: "${CFST_SLEEP_CMD:=sleep}"
+
+usage_error() {
+    printf '%s\n' "$1" >&2
+    exit 2
+}
+
+cfst_source_core() {
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/config.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/state.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/log.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/lock.sh"
+}
+
+cfst_source_runner() {
+    cfst_source_core
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/naming.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/geoip.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/result.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/dns.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/runner.sh"
+}
+
+cmd_run() {
+    mode=''
+    trigger=''
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --mode)
+                [ "$#" -ge 2 ] || usage_error 'run: --mode requires a value'
+                mode="$2"
+                shift 2
+                ;;
+            --trigger)
+                [ "$#" -ge 2 ] || usage_error 'run: --trigger requires a value'
+                trigger="$2"
+                shift 2
+                ;;
+            *)
+                usage_error "run: unknown argument: $1"
+                ;;
+        esac
+    done
+    case "$mode" in
+        test-only|test-and-update) : ;;
+        *) usage_error 'run: --mode must be test-only or test-and-update' ;;
+    esac
+    case "$trigger" in
+        manual|cron|hotplug) : ;;
+        *) usage_error 'run: --trigger must be manual, cron, or hotplug' ;;
+    esac
+
+    cfst_source_runner
+    run_task "$mode" "$trigger"
+}
+
+cmd_stop() {
+    [ "$#" -eq 0 ] || usage_error 'stop: unexpected arguments'
+    cfst_source_core
+
+    [ -d "$CFST_LOCK_DIR" ] || return 0
+    owner_pid="$(read_lock pid 2>/dev/null || true)"
+    case "$owner_pid" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+
+    kill -TERM "$owner_pid" 2>/dev/null || true
+
+    grace="${CFST_STOP_GRACE_SECONDS:-5}"
+    case "$grace" in
+        ''|*[!0-9]*) grace=5 ;;
+    esac
+
+    waited=0
+    while [ "$waited" -lt "$grace" ]; do
+        if ! kill -0 "$owner_pid" 2>/dev/null; then
+            return 0
+        fi
+        ${CFST_SLEEP_CMD:-sleep} 1
+        waited=$((waited + 1))
+    done
+
+    # KILL only if the same PID still owns the lock
+    current_pid="$(read_lock pid 2>/dev/null || true)"
+    if [ "$current_pid" = "$owner_pid" ]; then
+        if kill -0 "$owner_pid" 2>/dev/null; then
+            kill -KILL "$owner_pid" 2>/dev/null || true
+        fi
+    fi
+    return 0
+}
+
+cmd_status() {
+    [ "$#" -eq 0 ] || usage_error 'status: unexpected arguments'
+    if [ -f "$CFST_STATUS_FILE" ]; then
+        cat "$CFST_STATUS_FILE"
+    else
+        printf '%s\n' '{"phase":"idle","message":"Idle","updated_at":0}'
+    fi
+}
+
+cmd_result() {
+    [ "$#" -eq 0 ] || usage_error 'result: unexpected arguments'
+    if [ -f "$CFST_STATE_FILE" ]; then
+        cat "$CFST_STATE_FILE"
+    else
+        printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null}'
+    fi
+}
+
+cmd_validate() {
+    [ "$#" -eq 0 ] || usage_error 'validate: unexpected arguments'
+    cfst_source_core
+    load_config
+    validate_publish_config
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        printf '%s\n' '{"valid":true}'
+    else
+        printf '{"valid":false,"error_code":"%s","error_message":"%s"}\n' \
+            "${CFST_ERROR_CODE:-CONFIG_INVALID}" \
+            "${CFST_ERROR_MESSAGE:-invalid}"
+    fi
+    return "$status"
+}
+
+cmd_logs() {
+    bytes=65536
+    if [ "$#" -ge 1 ]; then
+        bytes="$1"
+        shift
+    fi
+    [ "$#" -eq 0 ] || usage_error 'logs: unexpected arguments'
+    cfst_source_core
+    read_log_bytes "$bytes"
+}
+
+cmd_clear_logs() {
+    [ "$#" -eq 0 ] || usage_error 'clear-logs: unexpected arguments'
+    cfst_source_core
+    clear_plugin_logs
+}
+
+cmd_apply_schedule() {
+    [ "$#" -eq 0 ] || usage_error 'apply-schedule: unexpected arguments'
+    if [ -f "$CFST_LIB_DIR/schedule.sh" ]; then
+        # shellcheck source=/dev/null
+        . "$CFST_LIB_DIR/config.sh"
+        # shellcheck source=/dev/null
+        . "$CFST_LIB_DIR/schedule.sh"
+        load_config
+        if [ "${CFST_ENABLED:-1}" = "1" ]; then
+            write_cron
+        else
+            remove_cron
+        fi
+        return $?
+    fi
+    # Task 10 will provide schedule.sh; succeed as a no-op until then.
+    return 0
+}
+
+main() {
+    [ "$#" -ge 1 ] || usage_error 'missing command'
+
+    command="$1"
+    shift
+
+    case "$command" in
+        run) cmd_run "$@" ;;
+        stop) cmd_stop "$@" ;;
+        status) cmd_status "$@" ;;
+        result) cmd_result "$@" ;;
+        validate) cmd_validate "$@" ;;
+        logs) cmd_logs "$@" ;;
+        clear-logs) cmd_clear_logs "$@" ;;
+        apply-schedule) cmd_apply_schedule "$@" ;;
+        *) usage_error "unknown command: $command" ;;
+    esac
+}
+
+main "$@"
