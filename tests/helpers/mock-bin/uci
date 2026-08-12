@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+option="$1"
+[ "$option" = "-q" ] && shift
+command="$1"
+shift
+
+case "$command" in
+    get)
+        key="$1"
+        [ -f "${CFST_TEST_UCI_FILE:-}" ] || exit 1
+        value="$(awk -F= -v key="$key" '
+            $1 == key {
+                sub(/^[^=]*=/, "")
+                print
+                found = 1
+                exit
+            }
+            END { if (!found) exit 1 }
+        ' "$CFST_TEST_UCI_FILE")" || exit 1
+        printf '%s\n' "$value"
+        ;;
+    *)
+        exit 1
+        ;;
+esac
