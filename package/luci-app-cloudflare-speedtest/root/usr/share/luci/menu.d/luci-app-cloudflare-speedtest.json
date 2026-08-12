@@ -1,0 +1,13 @@
+{
+	"admin/services/cloudflare-speedtest": {
+		"title": "Cloudflare 优选 IP",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "cloudflare-speedtest/overview"
+		},
+		"depends": {
+			"acl": [ "luci-app-cloudflare-speedtest" ]
+		}
+	}
+}

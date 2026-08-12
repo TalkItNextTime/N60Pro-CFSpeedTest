@@ -31,16 +31,6 @@ _lookup_code() {
     [ -f "$file" ] || { printf ''; return 0; }
 
     awk -F '\t' -v needle="$needle" '
-        function lower(s,   i, c, out) {
-            out = ""
-            for (i = 1; i <= length(s); i++) {
-                c = substr(s, i, 1)
-                if (c >= "A" && c <= "Z")
-                    c = sprintf("%c", and(index("ABCDEFGHIJKLMNOPQRSTUVWXYZ", c) + 96, 255))
-                # portable lowercase via tolower for whole string instead
-            }
-            return tolower(s)
-        }
         {
             code = $1
             aliases = $2
