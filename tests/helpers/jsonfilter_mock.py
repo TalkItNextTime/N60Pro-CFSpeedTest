@@ -51,8 +51,10 @@ def resolve(source: object, expression: str) -> object:
         value = value[key]
     if isinstance(value, bool):
         return "true" if value else "false"
-    if value is None or isinstance(value, (dict, list)):
-        fail()
+    if value is None:
+        return "null"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return value
 
 
