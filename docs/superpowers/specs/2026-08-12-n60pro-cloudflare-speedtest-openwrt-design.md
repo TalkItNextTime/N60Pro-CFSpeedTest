@@ -66,7 +66,7 @@ RPC 接口至少包括：读取脱敏配置摘要、读取运行状态、启动�
 
 UCI 包名为 `cloudflare-speedtest`。配置拆分为以下逻辑节：
 
-`main` 保存启用状态、基础周期、启动延迟、工作模式、时区显示策略和日志级别。默认启用周期为 6 小时。主调度机制固定采用 cron：配置应用时生成 `/etc/cron.d/cloudflare-speedtest`，由 cron 唤起 `runner`；procd 只管理手动任务、停止操作和状态，不运行第二套周期调度器，从根本上避免重复任务。
+`main` 保存启用状态、基础周期、启动延迟、工作模式、时区显示策略和日志级别。默认启用周期为 6 小时。主调度机制固定采用 BusyBox `crond`：配置应用时原子更新 `/etc/crontabs/root` 中由插件标记的单行任务，再向 cron 服务发送 reload；procd 只管理初始化、手动任务、停止操作和状态，不运行第二套周期调度器，从根本上避免重复任务。
 
 `cloudflare` 保存 API Token、Zone 名称、可选 Zone ID 缓存、TTL 和代理状态。代理状态在首版固定为关闭，界面显示原因但不提供橙云选项。Token 在配置文件中以 `0600` 权限保存；UCI 本身不提供加密能力，因此界面与文档必须明确这是设备本地敏感配置，并要求管理员保护路由器登录权限和备份文件。
 
@@ -203,6 +203,6 @@ N60Pro-CFSpeedTest/
 
 CloudflareSpeedTest 上游使用 Go 构建，当前仓库模块声明兼容 Go 1.18。上游明确提示路由器应降低 `-n` 并发，测速时应关闭或绕过代理。上游 CSV 首行是其排序后的最佳结果，但本插件仍执行独立校验。
 
-核心 OpenWrt 依赖固定为 BusyBox shell、`curl`、`ca-bundle`、`jsonfilter`、UCI、ubus、rpcd、procd、cron 和 LuCI 基础组件。选择 `curl` 是因为 Cloudflare API 同步需要可靠处理请求方法、请求头、响应头、状态码和重试；选择 `jsonfilter` 是因为它是 OpenWrt 常用的轻量 JSON 查询工具。实施时仍需在 XploreWrt 24.10 实机确认这些包的具体名称和已安装状态。
+核心 OpenWrt 依赖固定为 BusyBox shell（含 `crond`）、`curl`、`ca-bundle`、`jsonfilter`、UCI、ubus、rpcd、procd 和 LuCI 基础组件。选择 `curl` 是因为 Cloudflare API 同步需要可靠处理请求方法、请求头、响应头、状态码和重试；选择 `jsonfilter` 是因为它是 OpenWrt 常用的轻量 JSON 查询工具。不声明独立 `cron` 软件包依赖，因为目标固件由 BusyBox 提供 `crond`。实施时仍需在 XploreWrt 24.10 实机确认这些组件的具体包名和已安装状态。
 
 Cloudflare API、归属查询服务和上游测速 URL 都是外部依赖。测速 URL 默认值不能被视为永久可用，LuCI 必须允许修改，并在文档中建议高级用户使用自己控制且位于 Cloudflare 后的下载测试地址。
