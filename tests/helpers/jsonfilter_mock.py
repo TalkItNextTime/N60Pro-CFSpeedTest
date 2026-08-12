@@ -60,7 +60,11 @@ def resolve(source: object, expression: str) -> object:
 
 def main() -> None:
     source, expression = parse_args(sys.argv[1:])
-    print(resolve(source, expression))
+    value = resolve(source, expression)
+    # Always emit UTF-8 with LF only so BusyBox/ash command substitution
+    # does not keep a trailing CR from Windows text-mode stdout.
+    sys.stdout.buffer.write((str(value) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
 
 
 if __name__ == "__main__":
