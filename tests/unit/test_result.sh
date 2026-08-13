@@ -36,7 +36,7 @@ assert_status 0 validate_cfst_header "$FIXTURES/valid.csv"
 assert_status 0 validate_cfst_header "$FIXTURES/no-qualified.csv"
 
 # BOM-prefixed header must still validate
-printf '\xEF\xBB\xBF' > "$TMP/bom.csv"
+printf '\357\273\277' > "$TMP/bom.csv"
 cat "$FIXTURES/valid.csv" >> "$TMP/bom.csv"
 assert_status 0 validate_cfst_header "$TMP/bom.csv"
 

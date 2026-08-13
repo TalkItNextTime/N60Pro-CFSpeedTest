@@ -2,6 +2,9 @@
 set -eu
 . "$CFST_ROOT/tests/helpers/assert.sh"
 
+# Pin UTC so epoch-based cron expectations stay deterministic on CI hosts.
+export TZ=UTC
+
 SCHEDULE_SH="$CFST_ROOT/package/cloudflare-speedtest/files/usr/libexec/cloudflare-speedtest/schedule.sh"
 assert_file_exists "$SCHEDULE_SH"
 # shellcheck disable=SC1090,SC1091
@@ -82,7 +85,7 @@ assert_eq "$line_count" "1"
 
 # --- successful manual publish re-anchors the next cron run by one interval ---
 assert_eq "$(schedule_date_field 1700000000 M)" "13"
-assert_eq "$(schedule_date_field 1700000000 H)" "06"
+assert_eq "$(schedule_date_field 1700000000 H)" "22"
 CFST_ENABLED=1
 CFST_INTERVAL_HOURS=6
 CFST_NOW=1700000000
