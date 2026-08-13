@@ -75,12 +75,14 @@ for rel in \
     etc/hotplug.d/iface/95-cloudflare-speedtest \
     etc/uci-defaults/90-cloudflare-speedtest \
     usr/bin/cloudflare-speedtest \
+    usr/libexec/cloudflare-speedtest/candidates.sh \
     usr/libexec/cloudflare-speedtest/config.sh \
     usr/libexec/cloudflare-speedtest/dns.sh \
     usr/libexec/cloudflare-speedtest/geoip.sh \
     usr/libexec/cloudflare-speedtest/lock.sh \
     usr/libexec/cloudflare-speedtest/log.sh \
     usr/libexec/cloudflare-speedtest/naming.sh \
+    usr/libexec/cloudflare-speedtest/preferred.sh \
     usr/libexec/cloudflare-speedtest/result.sh \
     usr/libexec/cloudflare-speedtest/runner.sh \
     usr/libexec/cloudflare-speedtest/schedule.sh \

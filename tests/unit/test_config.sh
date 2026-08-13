@@ -21,8 +21,12 @@ assert_eq "$CFST_ENABLED" "1"
 assert_eq "$CFST_INTERVAL_HOURS" "6"
 assert_eq "$CFST_THREADS" "50"
 assert_eq "$CFST_DOWNLOAD_COUNT" "5"
-assert_eq "$CFST_TEST_URL" "https://cf.xiu2.xyz/url"
+assert_eq "$CFST_TEST_URL" "https://speed.cloudflare.com/__down?bytes=99000000"
 assert_eq "$CFST_MIN_SPEED_MBPS" "0.01"
+assert_eq "$CFST_NAMING_TEMPLATE" "cf"
+assert_eq "$CFST_IP_SOURCE" "cidr"
+assert_eq "$CFST_CANDIDATE_COUNT" "0"
+assert_eq "$CFST_TEST_ALL" "0"
 
 set +e
 validate_publish_config

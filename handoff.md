@@ -1,432 +1,321 @@
-# N60 Pro CloudflareSpeedTest OpenWrt 插件开发交接
+# N60 Pro CloudflareSpeedTest OpenWrt 插件 — 会话交接
 
-更新时间：2026-08-12
+更新时间：2026-08-12（实地安装与 LuCI 路径修复之后）
 
-## 1. 项目目标
+---
 
-本项目为 Netcore N60 Pro（XploreWrt 24.10-SNAPSHOT，`mediatek/filogic`，`aarch64_cortex-a53`，2 GB RAM，512 MB SPI NAND）开发原生 OpenWrt 插件，用于：
+## 1. 项目目标（不变）
 
-定时运行 XIU2/CloudflareSpeedTest，筛选低延迟且下载速度较高的 Cloudflare IPv4；根据路由器公网出口自动识别城市和运营商，例如“深圳电信”映射为 `szct`；将优选 IP 发布为 Cloudflare 灰云 A 记录，例如 `szct.domain.com`；在 LuCI 的“服务”菜单中提供配置、状态、手动测速、DNS 更新、停止任务和日志查看界面。
+为 Netcore N60 Pro（XploreWrt 24.10-SNAPSHOT，`mediatek/filogic`，`aarch64_cortex-a53`，2 GB RAM，512 MB SPI NAND）提供原生 OpenWrt 插件：
 
-目标仓库：<https://github.com/TalkItNextTime/N60Pro-CFSpeedTest.git>
+- 定时运行 XIU2/CloudflareSpeedTest，选出低延迟、可下载的 Cloudflare IPv4
+- 按公网出口识别城市/运营商（如东莞电信 → `dgct`）
+- 发布为 Cloudflare **灰云** A 记录（如 `dgct.yourdomain.com`）
+- LuCI「服务」菜单单页：状态、配置、手动测速、DNS 更新、停止、日志
 
-上游测速器：<https://github.com/XIU2/CloudflareSpeedTest>
+仓库：https://github.com/TalkItNextTime/N60Pro-CFSpeedTest.git
+上游：https://github.com/XIU2/CloudflareSpeedTest（pin v2.3.5 / commit `65b43aa…`）
 
-## 2. 已确认的产品决策
+规格与计划：
 
-已经完成需求讨论并确认以下设计：
+- `docs/superpowers/specs/2026-08-12-n60pro-cloudflare-speedtest-openwrt-design.md`
+- `docs/superpowers/plans/2026-08-12-n60pro-cloudflare-speedtest-openwrt.md`
+- 实机清单：`docs/acceptance-n60pro.md`
 
-- 使用原生 OpenWrt 软件包，而不是 Docker。最终包含核心包 `cloudflare-speedtest` 和界面包 `luci-app-cloudflare-speedtest`，同时提供辅助安装脚本。
-- LuCI 使用单页仪表盘，集中显示状态卡、手动操作、配置和日志。
-- 地区与运营商采用“公网 IPv4 自动识别 + LuCI 手动字段覆盖 + 上次可信缓存 + 固定回退”的优先级。
-- DNS 只创建 A 记录，并固定为灰云 `proxied=false`。橙云会覆盖优选 IP 的解析意义，因此首版不支持。
-- 公网归属变化时，先成功创建或更新新记录，再清理插件明确登记为 managed 的旧记录。不得删除用户手工管理的其他 DNS 记录。
-- 默认均衡测速参数为低并发模式，计划每 6 小时执行一次。
-- Cloudflare 使用 API Token，不支持 Global API Key。最小权限为目标 Zone 的 `Zone:Read` 与 `DNS:Edit`。
-- 周期调度采用 BusyBox `crond`，原子维护 `/etc/crontabs/root` 中带插件标记的一行；procd 不再运行另一套周期调度器。
+---
 
-完整设计规格见：
-
-- [设计规格](docs/superpowers/specs/2026-08-12-n60pro-cloudflare-speedtest-openwrt-design.md)
-- [实施计划](docs/superpowers/plans/2026-08-12-n60pro-cloudflare-speedtest-openwrt.md)
-
-## 3. Git 与远端状态
-
-当前工作分支：
+## 2. Git 状态（下一会话先核对）
 
 ```text
-feature/openwrt-plugin-implementation
+分支: feature/openwrt-plugin-implementation
+相对 origin/feature/... : ahead 12（本地未 push）
 ```
 
-当前已提交 HEAD：
+近期关键提交：
 
 ```text
-b32657b feat: implement city/ISP naming and hostname mapping
+a30d78c docs: record N60 Pro field acceptance results
+e204243 fix: harden production path from N60 Pro field testing
+8eed7c8 docs: add installation and N60 Pro acceptance guide
+edb92b6 build: produce verified OpenWrt release artifacts
+e548666 feat: add LuCI speed test dashboard
+87c1da9 feat: expose safe rpcd management API
+…（Task 6–14 均已提交）
 ```
 
-该提交已经推送到：
+未提交/未跟踪（注意）：
+
+- `M README.md`、`M LICENSE`、`M tests/unit/test_docs.sh`（文档/许可证小改，可择机整理）
+- `?? dist/` — 含本机交叉编译的 ARM64 `cfst`（约 7.7MB），**不要误 commit 大二进制**，除非发布流程明确要求
+
+**不要 push、不要打 tag**，除非用户明确要求。
+
+---
+
+## 3. 已完成（主机）
+
+| 模块 | 状态 |
+|------|------|
+| Task 1–5 脚手架/config/state/log/lock/naming | 完成并提交 |
+| Task 6 GeoIP | 完成；后续实地加固（见 §5） |
+| Task 7 result CSV | 完成 |
+| Task 8 DNS API | 完成（mock 集成测） |
+| Task 9 runner + CLI | 完成；实地加固 |
+| Task 10 cron/procd/hotplug | 完成；cksum 回退 |
+| Task 11 包 + pin CFST | 完成 |
+| Task 12 rpcd + ACL | 完成 |
+| Task 13 LuCI overview.js | 完成 |
+| Task 14 build/install/CI 脚本 | 完成（Windows 无法跑完整 SDK） |
+| Task 15 README + acceptance | 完成 |
+
+主机测试：
+
+- 全量 `sh tests/run.sh` 在 Windows 上易因后台 `sleep 900` 看门狗残留被工具 kill
+- 已加 **`CFST_DISABLE_WATCHDOG=1`**（仅测试环境）：`reset_env` 默认开启；超时用例显式 `unset`
+- 快速验证可用：`tests/unit/*` + `test_dns` + `test_rpcd` + 手动 debug runner
+- 正式 CI 应在 Linux 上跑完整 suite（含超时/取消）
+
+本机 Go 1.26.5 已用于交叉编译：
 
 ```text
-origin/feature/openwrt-plugin-implementation
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build → dist/cfst
+GOPROXY=https://goproxy.cn,direct
+SHA256 pin 与 upstream/cloudflare-speedtest.version 一致
 ```
 
-当前功能分支相对 `origin/main` 领先 5 个提交。最近提交顺序如下：
+---
+
+## 4. 已完成（路由器实地）
+
+### 4.1 设备与连接
 
 ```text
-b32657b feat: implement city/ISP naming and hostname mapping
-0400ec6 feat: prevent concurrent speed tests
-c2476fa feat: add atomic state and bounded logs
-d2210b1 feat: define validated UCI configuration
-be235d0 test: add portable shell test harness
-447c4c7 docs: add OpenWrt plugin implementation plan
-85e8f62 docs: add OpenWrt plugin design specification
+主机: 192.168.6.1
+端口: 22
+用户: root
+密码：（不记录于仓库；使用用户本地保存的密码）
 ```
 
-不要在未检查工作区前切换分支、reset、clean 或拉取覆盖。目前存在大量未提交工作和临时文件。
-
-## 4. 已提交并推送的完成内容
-
-### 4.1 设计与实施计划
-
-设计规格和 16 个任务的实施计划已经提交到 `main`，并包含架构、安全策略、Cloudflare 同步顺序、LuCI 界面、测试和 N60 Pro 实机验收要求。
-
-### 4.2 测试基础设施
-
-提交 `be235d0` 已建立：
-
-- `Makefile`：`make test` 与 `make shellcheck` 入口。
-- `tests/run.sh`：自动运行 `tests/unit/test_*.sh` 和 `tests/integration/test_*.sh`。
-- `tests/helpers/assert.sh`：轻量断言函数。
-- `tests/helpers/jsonfilter_mock.py` 与 mock 命令。
-- `.github/workflows/test.yml`：Ubuntu 24.04 主机测试和 ShellCheck。
-- GPL-3.0 `LICENSE`。
-
-### 4.3 UCI 配置契约
-
-提交 `d2210b1` 已建立：
-
-- `package/cloudflare-speedtest/files/etc/config/cloudflare-speedtest`
-- `package/cloudflare-speedtest/files/usr/libexec/cloudflare-speedtest/config.sh`
-- `tests/unit/test_config.sh`
-- `tests/helpers/mock-bin/uci`
-
-已覆盖默认值、Token/Zone 缺失、非法 Zone、线程和丢包率边界等验证。默认参数包括：
+本机工具（已下载到用户 Temp，可复用）：
 
 ```text
--n 50 -t 4 -dn 5 -dt 10 -tp 443 -tl 200 -tlr 0.2
+C:\Users\Admin\AppData\Local\Temp\opencode\plink.exe
+C:\Users\Admin\AppData\Local\Temp\opencode\pscp.exe
+hostkey: SHA256:TjpRkoCTjJUpsn860PfLMcd2u26vIVChkUWSNIxXiTk
 ```
 
-插件解析阶段默认以 `0.01 MB/s` 排除明显不可用或疑似回源结果，不直接向 CFST 传严格 `-sl`，以免长时间遍历。
+示例：
 
-### 4.4 原子状态与有限日志
+```powershell
+$plink = "C:\Users\Admin\AppData\Local\Temp\opencode\plink.exe"
+$hk = "SHA256:TjpRkoCTjJUpsn860PfLMcd2u26vIVChkUWSNIxXiTk"
+& $plink -ssh -P 22 -pw "<ROUTER_PASSWORD>" -hostkey $hk -batch root@192.168.6.1 "ubus call system board"
+```
 
-提交 `c2476fa` 已建立：
-
-- `state.sh`：运行状态、持久状态 schema v1、原子临时文件加 `mv` 写入、损坏状态进入保守模式。
-- `log.sh`：日志大小限制、轮转、Token 和 Authorization 脱敏、有限字节读取、清空插件日志。
-- `test_state.sh`、`test_log.sh`。
-
-### 4.5 任务互斥锁
-
-提交 `0400ec6` 已建立：
-
-- `lock.sh`：原子目录锁、PID/启动时间/触发来源、锁所有权、存活 PID 检查、陈旧锁恢复。
-- `test_lock.sh` 与测试专用 PID 存活模拟命令。
-
-锁库本身不注册 trap；计划要求只在 runner 中注册 `trap 'release_lock' EXIT INT TERM`。
-
-### 4.6 城市、运营商和域名映射
-
-提交 `b32657b` 已建立：
-
-- `naming.sh`
-- `cities.tsv`
-- `providers.tsv`
-- `test_naming.sh`
-
-已覆盖深圳/北京/上海/广州及中英文别名，运营商代码包括：
+固件：
 
 ```text
-中国电信 ct
-中国联通 cu
-中国移动 cm
-中国广电 cbn
-教育网 cernet
+XploreWrt 24.10-SNAPSHOT r0-b3f5438
+mediatek/filogic, aarch64_cortex-a53, kernel 6.6.95
+Netcore N60 Pro Modded (2G RAM, SPI NAND 512MB)
 ```
 
-域名模板默认为 `{city}{isp}.{zone}`，例如 `szct.domain.com`。实现会拒绝大写、下划线、空标签、超长标签、超长 FQDN 和未知占位符。
+### 4.2 安装方式（当前）
 
-注意：`naming.sh` 中 `_lookup_code()` 定义了一个没有实际用途的 awk `lower()` 函数，而且包含对 `and()` 的引用。虽然当前测试通过且该函数未调用，但后续质量审查时应删除这段死代码，避免 BusyBox awk 兼容风险。
+**不是 opkg IPK**，而是 **文件级安装**（Windows 无 OpenWrt SDK）：
 
-## 5. 当前未提交的进行中工作
+- 最新一次：`/tmp/cfst-install.tgz` + `/tmp/install-on-router.sh`
+- 关键点：
+  - JS 必须装到 **`/www/luci-static/resources/view/cloudflare-speedtest/overview.js`**
+  - 早期错误装到 `/htdocs/...`（已 `rm -rf /htdocs`）
+  - ACL 必须在 **`/usr/share/rpcd/acl.d/luci-app-cloudflare-speedtest.json`**（本机固件不从 `/etc/acl.d` 加载）
+  - 同时保留 `/etc/acl.d/` 副本无害
 
-Task 6“公网 IPv4 与 GeoIP 提供方适配”正在开发，尚未提交，当前包含：
-
-- `package/cloudflare-speedtest/files/usr/libexec/cloudflare-speedtest/geoip.sh`
-- `tests/unit/test_geoip.sh`
-- `tests/fixtures/geoip/invalid.json`
-- `tests/fixtures/geoip/ipapi-public.json`
-- `tests/fixtures/geoip/ipapi-shenzhen-telecom.json`
-- `tests/fixtures/geoip/ipwhois-public.json`
-- `tests/fixtures/geoip/ipwhois-shenzhen-telecom.json`
-- 对 `tests/helpers/jsonfilter_mock.py` 的未提交修改。
-
-`geoip.sh` 当前意图包括：
-
-- 严格检查公网 IPv4，拒绝私网、环回、链路本地、组播、保留段和 TEST-NET 文档地址。
-- 适配 `ipapi.co` 与 `ipwho.is`。
-- 使用 `curl --noproxy '*'`，并清除大小写代理环境变量，避免透明/显式代理污染出口识别。
-- 自动提供方、手动覆盖、未过期缓存、固定回退的字段级选择。
-- 无安全名称时返回 `41` 和 `GEO_ALL_PROVIDERS_FAILED`。
-
-这部分当前没有通过测试，不能视为已完成。
-
-## 6. 当前测试状态和确切失败原因
-
-最近执行：
-
-```sh
-sh tests/run.sh
-```
-
-退出码为 `1`。已提交部分的测试继续执行，但新增 `tests/unit/test_geoip.sh` 失败。
-
-失败发生在第一个 `parse_ipapi` 用例。跟踪结果显示测试调用：
-
-```sh
-jsonfilter -i tests/fixtures/geoip/ipapi-shenzhen-telecom.json -e '@.ip'
-```
-
-mock `jsonfilter` 没有返回内容，随后 `parse_ipapi` 因 `ip/city/isp` 为空返回 1。
-
-根因是当前未提交的 `tests/helpers/jsonfilter_mock.py` 已被意外写坏。当前 diff 中结尾出现了被真实换行切断的 Python f-string：
-
-```python
-sys.stdout.buffer.write(f"{value}
-".encode("utf-8"))
-```
-
-这不是合法 Python。原意是规避 Windows 文本模式 stdout 输出 `CRLF` 导致 ash 命令替换保留 `\r`，正确实现应当类似：
-
-```python
-sys.stdout.buffer.write((str(value) + "\n").encode("utf-8"))
-sys.stdout.buffer.flush()
-```
-
-下一会话应首先修复该语法，再运行：
-
-```sh
-python3 -m py_compile tests/helpers/jsonfilter_mock.py
-CFST_ROOT="$PWD" PATH="$PWD/tests/helpers/mock-bin:$PATH" sh tests/unit/test_geoip.sh
-sh tests/run.sh
-```
-
-如果 `parse_ipapi` 仍为空，再单独验证：
-
-```sh
-CFST_ROOT="$PWD" tests/helpers/mock-bin/jsonfilter \
-  -i tests/fixtures/geoip/ipapi-shenzhen-telecom.json \
-  -e '@.ip'
-```
-
-预期输出为：
+安装后应存在：
 
 ```text
-203.0.113.10
+/usr/bin/cfst
+/usr/bin/cloudflare-speedtest
+/usr/libexec/cloudflare-speedtest/*.sh
+/usr/share/cloudflare-speedtest/{ip.txt,cities.tsv,providers.tsv}
+/etc/config/cloudflare-speedtest
+/etc/init.d/cloudflare-speedtest
+/usr/libexec/rpcd/cloudflare-speedtest
+/usr/share/luci/menu.d/luci-app-cloudflare-speedtest.json
+/usr/share/rpcd/acl.d/luci-app-cloudflare-speedtest.json
+/www/luci-static/resources/view/cloudflare-speedtest/overview.js
 ```
 
-注意：TEST-NET 地址只用于解析夹具；实时 `validate_public_ipv4` 必须继续拒绝它，不能为通过测试而放宽生产校验。
+服务：`/etc/init.d/cloudflare-speedtest enable` + restart；`rpcd` / `uhttpd` 已 restart。
 
-## 7. 工作区污染与清理注意事项
+### 4.3 实地功能结果
 
-工作区存在大量由中断的后台实现代理留下的未跟踪临时文件，例如：
+| 项 | 结果 |
+|----|------|
+| test-only | **成功**，例：`104.16.1.1` / LAX，有延迟与速度 |
+| GeoIP | ipwho.is → 东莞电信 → **`dg`/`ct`** |
+| hostname | 配 zone 后 **`dgct.domain.com`** |
+| 无 Token 的 test-and-update | **`CONFIG_TOKEN_MISSING`**，不改 DNS |
+| Token 脱敏 | logs / `config_summary` 仅 `token_configured` |
+| Cron | **`14 */6 * * * ... # cloudflare-speedtest`** |
+| CLI validate/status/result | 正常 |
+| rpcd list/call | 正常 |
+
+UCI 在最近一次安装中已清成「首配」状态，便于用户在 LuCI 填 Token：
 
 ```text
-.tmp-*.txt
-.tmp-*.json
-.tmp-*.md
-.tmp/
-out-*.txt
+cloudflare.api_token 空
+cloudflare.zone 空
+main.enabled=1
+geo.provider_order='ipwho.is ipapi.co'
 ```
 
-这些文件不是产品代码，不应提交。但不能直接执行 `git clean -xfd`，因为以下未跟踪文件是需要保留的真实 Task 6 工作：
+### 4.4 用户当前意图（重要）
+
+用户要求：
+
+1. **先安装好**（已完成文件级安装 + LuCI 路径修复）
+2. **自己在 LuCI 设置页**提交 CF Token、zone 等
+3. 提交成功后再通知 AI **继续** DNS 发布与剩余验收
+
+下一会话：**先等用户确认已在页面保存配置**，或 SSH 检查 `uci show cloudflare-speedtest.cloudflare` 是否已有 token/zone；不要擅自要 Token 明文写入仓库。
+
+LuCI 入口（预期）：
 
 ```text
-package/cloudflare-speedtest/files/usr/libexec/cloudflare-speedtest/geoip.sh
-tests/fixtures/geoip/*
-tests/unit/test_geoip.sh
+http://192.168.6.1  →  服务 → Cloudflare 优选 IP
 ```
 
-建议修复并提交 Task 6 后，再精确删除根目录临时文件。安全做法是先查看：
+若菜单不可见：再 `rpcd`/`uhttpd` restart，硬刷新浏览器；确认 root 会话 ACL。
 
-```sh
-git status --short
-git clean -nd -- '.tmp*' 'out-*.txt'
-```
+---
 
-确认预览只包含临时文件后，再有选择地删除。不要把 `.tmp*` 一股脑加入仓库；可以在 `.gitignore` 增加项目根目录专用规则 `/.tmp*`、`/out-*.txt`，但应先确认不会屏蔽计划中的正式文件。
+## 5. 实地修复清单（已进代码 `e204243`）
 
-当前 `.tools/` 和 Python `__pycache__/` 已在 `.gitignore` 中。
+1. **`ip.txt` 仅裸 IPv4 CIDR** — CFST 不认 `#` 注释；runner 另有 `runner_prepare_ip_file` 防御清洗
+2. **runner 传 `-url`** — 使用 UCI `test_url`
+3. **超时判定** — 用 `timed_out_flag`，勿把 cfst 立即失败误报为 TIMEOUT
+4. **watchdog 用真 `sleep`**，不用 `CFST_SLEEP_CMD`；测试可用 `CFST_DISABLE_WATCHDOG=1`
+5. **`schedule_minute`** — 无 `cksum` 时用 `md5sum`/`od`/固定 17
+6. **ipwho.is** — `connection.isp` 有时是门牌；像地址时改用 `connection.org`
+7. **ISP 映射** — 长 org 子串匹配（alias 长度 ≥ 4），如 `CHINANET Guangdong province network` → `ct`
+8. **默认 Geo 顺序** — `ipwho.is` 先于 `ipapi.co`（国内 ipapi 常被 CF 人机页拦）
+9. **cities.tsv** — 补东莞 `dg` 等城市
+10. **LuCI 安装路径** — `/www/...` + `/usr/share/rpcd/acl.d/`（见 §4.2）
 
-## 8. 已踩过的坑和解决经验
+---
 
-### 8.1 Git 初次推送网络重置
+## 6. 安全与正确性底线（必须继续遵守）
 
-首次 `git push` 出现 `Recv failure: Connection was reset`，重试后成功。Git 还会输出：
+- Token 不得进命令行参数、进程列表、日志、ubus 明文、LuCI 回显
+- 自动化测试不得打真实 Cloudflare API
+- 测速/Geo 失败不得改 DNS
+- 新记录成功校验后再清旧 managed 记录
+- state 损坏禁止自动删历史 DNS
+- 多条同名 A 记录停止并人工处理
+- 仅 A + 灰云；不做橙云/AAAA
+- 外部字符串不可信；禁止 `eval`；正确引用
+- 公网/测速请求绕过透明代理；`0.xx ms` 常为代理污染
+- 安装不用 `--force-depends`
+- 不打版本 tag，除非主机测 + SDK + 实机全过且用户要求
 
-```text
-git: 'credential-manager-core' is not a git command
-```
+---
 
-该提示没有阻止已认证推送，属于本机 Git credential helper 配置问题。遇到网络失败应检查远端状态后重试，不要重新初始化仓库。
+## 7. 下一会话建议任务（按优先级）
 
-### 8.2 原工作目录最初未被工具识别为 Git 仓库
+### P0 — 等用户 LuCI 配置后
 
-`EnterWorktree` 和隔离 subagent 曾错误报告“不在 git repository”，但直接执行 `git rev-parse` 证明仓库正常。最终没有成功创建 linked worktree，而是在普通 checkout 上创建并使用功能分支：
+1. SSH 确认配置（**不要**把 token 打进 handoff/commit）：
+   ```sh
+   uci get cloudflare-speedtest.cloudflare.zone
+   # token 只查是否非空：
+   [ -n "$(uci -q get cloudflare-speedtest.cloudflare.api_token)" ] && echo token_set
+   /usr/bin/cloudflare-speedtest validate
+   ```
+2. 跑：
+   ```sh
+   /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger manual
+   /usr/bin/cloudflare-speedtest result
+   /usr/bin/cloudflare-speedtest status
+   logread -e cloudflare-speedtest   # 或 tail 插件日志
+   nslookup <hostname> 1.1.1.1
+   ```
+3. 确认灰云 A、managed_record、旧记录清理策略符合设计
+4. 更新 `docs/acceptance-n60pro.md` 勾选 DNS 相关项
 
-```text
-feature/openwrt-plugin-implementation
-```
+### P1 — LuCI 交互验收
 
-下一会话不要假设当前目录是 harness 管理的 worktree；它是普通仓库 checkout。不要使用 `ExitWorktree` 清理。
+- 菜单可见、表单保存 UCI、Token 用 set_token/密码框不回显
+- 仅测速 / 测速并更新 / 停止 / 日志 / 校验配置
+- 轮询状态卡（active 3s / idle 15s）
 
-### 8.3 Windows `/tmp` 与 Python 路径语义不同
+### P2 — 剩余实地项
 
-Git Bash 中 `/tmp/foo` 对 shell 有效，但 Windows Python 的 `Path('/tmp/foo')` 可能解析成当前盘根目录的 `\tmp\foo`，造成找不到文件。主机测试中尽量让 shell 自己读临时文件，或向 Python 传 Windows 可解析的路径。
+- 并发冲突、停止取消、重启持久化、多轮 cron、CPU/内存、卸载重装
 
-### 8.4 mock UCI 的 while 管道/命令替换退出状态
+### P3 — 正式 IPK 与发布
 
-最初 mock `uci` 使用 `while read` 搜索键，即使找到值，循环最后一次 `read` 仍可能令命令替换返回非零，导致 `cfst_config_get`错误使用默认值。后来改为 awk 查找并明确退出。
+- 在 **Linux** 或 GitHub Actions 跑：
+  ```sh
+  sh scripts/build-cfst.sh /tmp/cfst-build
+  sh scripts/build-sdk.sh dist
+  sha256sum -c dist/SHA256SUMS
+  ```
+- 用 `opkg install` 两包，验证 uci-defaults、conffiles、卸载行为
+- 用户明确要求后再 push / 开 PR / 打 tag
 
-### 8.5 ShellCheck 在 Windows 输出中文乱码
+### P4 — 清理
 
-下载的 Windows ShellCheck 可执行文件能正常发现问题，但中文消息在 Git Bash 中可能显示乱码。这不代表源码编码损坏。重点查看规则编号和行号。
+- 决定是否 commit README/LICENSE/test_docs 残留
+- `dist/cfst` 是否进 `.gitignore`（建议 ignore，CI 产物不进 git）
+- 提醒用户路由器 root 密码已在聊天中出现，建议改密
 
-### 8.6 ShellCheck SC2034/SC2015/SC1090
+---
 
-配置库中的变量是供后续 sourced 脚本消费，ShellCheck 会误判为未使用，已使用文件级 `SC2034`。`A && B || C` 被重构为明确 `if`，避免 SC2015 和错误的类三元语义。动态 source 的测试使用 `SC1090,SC1091` 抑制。
-
-### 8.7 JSON mock 必须返回对象
-
-持久状态测试需要 `jsonfilter` 对对象/数组输出紧凑 JSON，而不是拒绝非标量。mock 已扩展支持对象、数组、布尔和 null。这一点对后续 Cloudflare API 测试同样重要。
-
-### 8.8 Windows CRLF 污染命令替换
-
-Python stdout 在 Windows 文本模式可能输出 `\r\n`，ash 命令替换只去掉 `\n`，留下 `\r`，导致字符串比较和 JSON 字段失效。Task 6 当前正试图使用 `sys.stdout.buffer` 固定输出 UTF-8 LF，但修改被写坏。修复时应使用明确的字节输出，不应删除所有 `\r` 来掩盖问题。
-
-### 8.9 OpenWrt cron 路径设计修正
-
-早期设计写成 `/etc/cron.d/cloudflare-speedtest`，这不符合 BusyBox crond 的常见 OpenWrt 使用方式。规格已改为原子维护 `/etc/crontabs/root` 中带标记的一行，并且不声明独立 `cron` 包依赖。
-
-### 8.10 上游与 SDK 固定版本
-
-实施计划已经固定：
-
-```text
-CloudflareSpeedTest v2.3.5
-commit 65b43aa58c5f9c7ab8ab83d2d27e35fc00d9cec4
-source SHA-256 ad013a23c54d8c9f54984221fbc6f683fd1fd111575115892ed0dff19d7f1d32
-```
-
-OpenWrt SDK 默认固定为：
-
-```text
-OpenWrt 24.10.2 mediatek/filogic
-openwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-SHA-256 df288284baa46d37cbc71812130b72617333f886f5c93c11f0548e28f0bb8309
-```
-
-普通构建不得使用 `latest` 或浮动分支。
-
-## 9. 下一步实施顺序
-
-下一会话应严格按实施计划继续，不要先做 LuCI，也不要跳过失败测试。
-
-### 第一步：恢复干净的 Task 6 红绿循环
-
-1. 修复 `tests/helpers/jsonfilter_mock.py` 的 Python 语法。
-2. 运行 `python3 -m py_compile`。
-3. 运行聚焦 GeoIP 测试并修复真实逻辑问题。
-4. 运行完整 `sh tests/run.sh`。
-5. 使用 ShellCheck 检查所有 shell 文件。
-6. 审查 `geoip.sh` 的 BusyBox 兼容性，尤其是：
-   - `env -u` 在目标 BusyBox/固件是否可用；更稳妥的做法可能是对子进程设置 `http_proxy= https_proxy= all_proxy= HTTP_PROXY= HTTPS_PROXY= ALL_PROXY=`。
-   - `_geo_field()` 当前多余地把 JSON同时通过 stdin 和 `-s` 传入，应简化。
-   - 第 258 行附近 `&&` 与 `||` 混用存在优先级歧义，应改成清晰的嵌套 `if`。
-   - 确认临时 body 文件不会在并发或异常退出时残留。
-7. 通过后提交并推送：
-
-```sh
-git add tests/helpers/jsonfilter_mock.py \
-  package/cloudflare-speedtest/files/usr/libexec/cloudflare-speedtest/geoip.sh \
-  tests/fixtures/geoip tests/unit/test_geoip.sh
-git commit -m "feat: detect WAN location with provider fallback
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-git push origin feature/openwrt-plugin-implementation
-```
-
-### 第二步：继续实施计划 Tasks 7–15
-
-按顺序完成：
-
-1. CFST CSV 严格解析和候选选择。
-2. Cloudflare API 模拟集成测试、幂等更新、429/5xx 重试及 managed 记录安全清理。
-3. runner、CLI、状态机、超时和取消。
-4. BusyBox crond、procd、hotplug 与 UCI defaults。
-5. 固定上游 v2.3.5，构建 ARM64 CFST，编写核心 OpenWrt package Makefile。
-6. rpcd/ubus API 和最小权限 ACL。
-7. LuCI JavaScript 单页仪表盘。
-8. OpenWrt SDK 构建脚本、安装脚本和 GitHub Actions。
-9. README 和 N60 Pro 实机验收文档。
-
-每个任务都应执行：失败测试、确认失败原因、最小实现、聚焦测试、完整主机测试、ShellCheck、提交、推送。
-
-### 第三步：主机端基本验收
-
-全部实现后至少执行：
-
-```sh
-sh tests/run.sh
-make shellcheck
-python3 -m py_compile tests/helpers/jsonfilter_mock.py tests/helpers/mock_http.py
-sh scripts/build-cfst.sh /tmp/cfst-build
-sh scripts/build-sdk.sh dist
-sha256sum -c dist/SHA256SUMS
-```
-
-SDK 构建可能受 Windows 主机、网络、tar/zstd 或 OpenWrt Linux 构建环境限制。如果无法在当前环境完成，不得宣称构建成功；应保留完整错误，并依赖 Linux GitHub Actions 构建产物。
-
-### 第四步：路由器实测留给用户后续安排
-
-用户明确表示后续会安排 N60 Pro 实地测试。因此当前会话应完成所有主机可验证内容和 IPK/CI 构建，实机项目保留在 `docs/acceptance-n60pro.md`。不要在没有路由器连接和真实受限 Cloudflare 测试 Token 的情况下声称端到端实机验证完成。
-
-## 10. 尚未实现的关键模块
-
-截至本交接文档，以下内容仍未开始或未完成：
-
-- Task 6 GeoIP：代码已生成但测试失败、未提交。
-- Task 7 CFST CSV 解析：未开始。
-- Task 8 Cloudflare DNS API：未开始。
-- Task 9 runner 与 CLI：未开始。
-- Task 10 cron/procd/hotplug：未开始。
-- Task 11 OpenWrt 核心包和 ARM64 CFST：未开始。
-- Task 12 rpcd 与 ACL：未开始。
-- Task 13 LuCI 仪表盘：未开始。
-- Task 14 SDK、安装器、发布 CI：未开始。
-- Task 15 README 与实机验收文档：已完成（Task 15 docs）。
-- Task 16 完整验证：未开始。
-
-当前不能生成可安装 IPK，也不能在 LuCI 中看到菜单，Cloudflare DNS 更新也尚未实现。
-
-## 11. 安全和正确性底线
-
-后续实现必须持续遵守：
-
-- Token 不得出现在命令行参数、进程列表、日志、ubus 响应或 LuCI 配置回显中。
-- 自动化测试不得调用真实 Cloudflare API 或修改真实 DNS。
-- 测速或 GeoIP 失败时不得改动现有 DNS。
-- 新 DNS 成功并校验后，才允许尝试清理旧 managed 记录。
-- 状态文件损坏时禁止自动删除历史 DNS。
-- 多条同名 A 记录必须停止并要求人工处理，不能猜测要覆盖哪一条。
-- 插件只管理 A/灰云；不要为了便利引入橙云或 AAAA。
-- 所有外部字符串都按不可信输入处理，不使用 `eval`，shell 变量全部正确引用。
-- 公网归属和测速请求必须绕过代理；出现 `0.xx ms` 延迟通常意味着代理污染。
-- 不要使用 `--force-depends` 安装 IPK。
-- 不要创建版本标签，除非所有主机测试、SDK 构建和实机验收均通过且用户明确要求发布。
-
-## 12. 接手时建议执行的首组命令
+## 8. 接手时首组命令
 
 ```sh
 git branch --show-current
-git status --short
-git log --oneline --decorate -8
-python3 -m py_compile tests/helpers/jsonfilter_mock.py
-CFST_ROOT="$PWD" PATH="$PWD/tests/helpers/mock-bin:$PATH" \
-  sh tests/unit/test_geoip.sh
-sh tests/run.sh
+git status -sb
+git log --oneline -12
+
+# 主机快速测（Windows）
+export CFST_ROOT="$PWD"
+export PATH="$PWD/tests/helpers/mock-bin:$PATH"
+# 勿盲目全量 run.sh；先 unit + dns/rpcd
+for t in tests/unit/test_*.sh; do sh "$t" || exit 1; done
+sh tests/integration/test_dns.sh
+sh tests/integration/test_rpcd.sh
 ```
 
-预期前两条确认当前位于 `feature/openwrt-plugin-implementation`，且能够看到未提交的 Task 6 文件。`py_compile` 目前预计失败；先修复该问题，再继续 GeoIP 逻辑调试。
+路由器：
 
-在修复 Task 6 并提交之前，不要运行会删除未跟踪文件的命令。
+```sh
+# 经 plink，见 §4.1
+ubus call system board
+ls -la /www/luci-static/resources/view/cloudflare-speedtest/overview.js
+ls -la /usr/share/rpcd/acl.d/luci-app-cloudflare-speedtest.json
+/usr/bin/cloudflare-speedtest validate
+echo '{}' | /usr/libexec/rpcd/cloudflare-speedtest call config_summary
+grep cloudflare /etc/crontabs/root
+```
+
+---
+
+## 9. 已知坑（环境）
+
+| 坑 | 处理 |
+|----|------|
+| Windows Git Bash `sleep` 看门狗残留 | `CFST_DISABLE_WATCHDOG=1`；杀残留 `sleep` 进程 |
+| PowerShell 吃 `$?` / `&&` | 复杂脚本写成文件再 `bash script.sh` 或 plink 远程 sh |
+| `proxy.golang.org` 不通 | `GOPROXY=https://goproxy.cn,direct` |
+| 无 `cksum` | schedule 已 md5sum 回退 |
+| ipapi.co CF 挑战页 | 默认 ipwho.is 优先 |
+| LuCI 路径 | **必须 /www**，ACL **必须 /usr/share/rpcd/acl.d** |
+| 正式 IPK | 需 Linux SDK；当前为手动部署，功能可用但非发版形态 |
+
+---
+
+## 10. 给下一会话的一句话
+
+**代码与实地加固已完成；路由器上文件级安装 + LuCI 路径已修好，等用户在设置页提交 Token/Zone 后，继续 test-and-update、DNS 验收与正式 IPK。**

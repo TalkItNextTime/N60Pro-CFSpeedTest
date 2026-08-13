@@ -70,6 +70,7 @@ printf '%s\n' "$build_content" | grep -E '(^|[^[:alnum:]_])(/latest|version=late
 # --- install.sh: versioned install, arch gate, no force-depends ---
 assert_contains "$install_content" '--version'
 assert_contains "$install_content" '--base-url'
+assert_contains "$install_content" 'TalkItNextTime/N60Pro-CFSpeedTest/releases/download'
 assert_contains "$install_content" '/etc/openwrt_release'
 assert_contains "$install_content" 'DISTRIB_ARCH'
 assert_contains "$install_content" 'aarch64_cortex-a53'

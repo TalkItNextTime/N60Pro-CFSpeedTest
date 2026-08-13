@@ -1,7 +1,13 @@
 .superpowers/
-.claude/settings.local.json
 .tools/
 __pycache__/
 # Task 15 ignores
 /.tmp*
 /out-*.txt
+
+# Local build and router deployment artifacts (release assets are produced by CI).
+/dist/
+/dist-new-abs/
+/deploy-cfst-*.tgz
+/tmp-cfst-install*.tgz
+/tmp-install-on-router.sh

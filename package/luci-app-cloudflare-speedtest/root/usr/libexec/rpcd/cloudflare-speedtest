@@ -14,6 +14,8 @@ set -eu
 : "${CFST_UCI_CONFIG:=/etc/config/cloudflare-speedtest}"
 : "${CFST_UCI_PACKAGE:=cloudflare-speedtest}"
 : "${CFST_LOG_RPC_MAX:=65536}"
+: "${CFST_CRONTAB_FILE:=/etc/crontabs/root}"
+: "${CFST_CRON_MARKER:=# cloudflare-speedtest}"
 
 # Portable JSON via jsonfilter + printf (works on device and host tests without jshn).
 # On device, /usr/share/libubox/jshn.sh may also be present; we intentionally avoid it
@@ -115,17 +117,44 @@ rpc_list() {
 EOF
 }
 
-rpc_status() {
-    if [ -f "$CFST_STATUS_FILE" ]; then
-        cat "$CFST_STATUS_FILE"
-    else
-        # Prefer CLI when available for consistent shape
-        if [ -x "$CFST_BIN" ] || command -v "$CFST_BIN" >/dev/null 2>&1; then
-            cli status 2>/dev/null || printf '%s\n' '{"phase":"idle","message":"Idle","updated_at":0}'
-        else
-            printf '%s\n' '{"phase":"idle","message":"Idle","updated_at":0}'
-        fi
+rpc_schedule_info() {
+    _enabled="$(uci -q get "${CFST_UCI_PACKAGE}.main.enabled" 2>/dev/null || printf '1')"
+    _interval="$(uci -q get "${CFST_UCI_PACKAGE}.main.interval_hours" 2>/dev/null || printf '6')"
+    case "$_enabled" in 1) ;; *) printf '{"schedule_enabled":false,"schedule_interval_hours":%s,"schedule_cron_line":"","next_run_at":null}' "$_interval"; return 0 ;; esac
+    _line="$(grep -F "$CFST_CRON_MARKER" "$CFST_CRONTAB_FILE" 2>/dev/null | head -n 1 || true)"
+    _next=''
+    if [ -n "$_line" ]; then
+        _minute="$(printf '%s\n' "$_line" | awk '{print $1}')"
+        _hour_field="$(printf '%s\n' "$_line" | awk '{print $2}')"
+        _cron_interval="$_interval"
+        _hour_list=''
+        case "$_hour_field" in
+            \*/[0-9]*) _cron_interval="${_hour_field#*/}" ;;
+            *[!0-9,]*|,*|*,,*) _cron_interval='' ;;
+            *) _hour_list="$_hour_field" ;;
+        esac
+        case "$_minute:$_cron_interval" in *[!0-9:]*|*:|:*) ;; *)
+            if [ -f "$CFST_LIB_DIR/schedule.sh" ]; then
+                # shellcheck source=/dev/null
+                . "$CFST_LIB_DIR/schedule.sh"
+                _next="$(schedule_next_run_epoch "$_cron_interval" "$_minute" "$_hour_list" 2>/dev/null || true)"
+            fi
+            ;;
+        esac
     fi
+    _line_esc="$(json_escape "$_line")"
+    case "$_next" in ''|*[!0-9]*) _next_json=null ;; *) _next_json="$_next" ;; esac
+    printf '{"schedule_enabled":true,"schedule_interval_hours":%s,"schedule_cron_line":"%s","next_run_at":%s}' "$_interval" "$_line_esc" "$_next_json"
+}
+
+rpc_status() {
+    _status='{"phase":"idle","message":"Idle","updated_at":0}'
+    if [ -f "$CFST_STATUS_FILE" ]; then _status="$(cat "$CFST_STATUS_FILE")"
+    elif [ -x "$CFST_BIN" ] || command -v "$CFST_BIN" >/dev/null 2>&1; then _status="$(cli status 2>/dev/null || printf '%s' "$_status")"; fi
+    _schedule="$(rpc_schedule_info)"
+    _schedule_body="$(printf '%s' "$_schedule" | sed 's/^{//;s/}$//')"
+    _status_body="${_status%\}}"
+    printf '%s,%s}\n' "$_status_body" "$_schedule_body"
 }
 
 rpc_result() {
@@ -133,9 +162,9 @@ rpc_result() {
         cat "$CFST_STATE_FILE"
     else
         if [ -x "$CFST_BIN" ] || command -v "$CFST_BIN" >/dev/null 2>&1; then
-            cli result 2>/dev/null || printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null}'
+            cli result 2>/dev/null || printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null,"network_cache":null}'
         else
-            printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null}'
+            printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null,"network_cache":null}'
         fi
     fi
 }
@@ -156,25 +185,37 @@ rpc_config_summary() {
     _log_level="$(uci -q get "${CFST_UCI_PACKAGE}.main.log_level" 2>/dev/null || printf 'info')"
     _zone="$(uci -q get "${CFST_UCI_PACKAGE}.cloudflare.zone" 2>/dev/null || true)"
     _ttl="$(uci -q get "${CFST_UCI_PACKAGE}.cloudflare.ttl" 2>/dev/null || printf '1')"
-    _template="$(uci -q get "${CFST_UCI_PACKAGE}.naming.template" 2>/dev/null || printf '{city}{isp}.{zone}')"
+    _proxied="$(uci -q get "${CFST_UCI_PACKAGE}.cloudflare.proxied" 2>/dev/null || printf '0')"
+    _template="$(uci -q get "${CFST_UCI_PACKAGE}.naming.template" 2>/dev/null || printf 'cf')"
     _auto_detect="$(uci -q get "${CFST_UCI_PACKAGE}.naming.auto_detect" 2>/dev/null || printf '1')"
     _threads="$(uci -q get "${CFST_UCI_PACKAGE}.test.threads" 2>/dev/null || printf '50')"
     _port="$(uci -q get "${CFST_UCI_PACKAGE}.test.port" 2>/dev/null || printf '443')"
+    _ip_source="$(uci -q get "${CFST_UCI_PACKAGE}.test.ip_source" 2>/dev/null || printf 'cidr')"
+    _candidate_count="$(uci -q get "${CFST_UCI_PACKAGE}.test.candidate_count" 2>/dev/null || printf '0')"
+    _test_all="$(uci -q get "${CFST_UCI_PACKAGE}.test.test_all" 2>/dev/null || printf '0')"
+    _preferred_provider="$(uci -q get "${CFST_UCI_PACKAGE}.preferred.provider" 2>/dev/null || printf 'auto')"
 
     # Validate numeric-ish fields are safe for bare JSON numbers; else quote as strings
     case "$_enabled" in ''|*[!0-9]*) _enabled=0 ;; esac
     case "$_interval" in ''|*[!0-9]*) _interval=6 ;; esac
     case "$_startup_delay" in ''|*[!0-9]*) _startup_delay=120 ;; esac
     case "$_ttl" in ''|*[!0-9]*) _ttl=1 ;; esac
+    case "$_proxied" in 1) _proxied=true ;; *) _proxied=false ;; esac
     case "$_auto_detect" in ''|*[!0-9]*) _auto_detect=1 ;; esac
     case "$_threads" in ''|*[!0-9]*) _threads=50 ;; esac
     case "$_port" in ''|*[!0-9]*) _port=443 ;; esac
+    case "$_candidate_count" in ''|*[!0-9]*) _candidate_count=0 ;; esac
+    case "$_test_all" in 1) _test_all=true ;; *) _test_all=false ;; esac
 
     _zone_esc="$(json_escape "$_zone")"
     _log_esc="$(json_escape "$_log_level")"
     _tpl_esc="$(json_escape "$_template")"
+    _ip_source_esc="$(json_escape "$_ip_source")"
+    _preferred_provider_esc="$(json_escape "$_preferred_provider")"
 
-    printf '{"token_configured":%s,"enabled":%s,"interval_hours":%s,"startup_delay":%s,"log_level":"%s","zone":"%s","ttl":%s,"naming_template":"%s","auto_detect":%s,"threads":%s,"port":%s,"proxied":false}\n' \
+    _schedule="$(rpc_schedule_info)"
+    _schedule_body="$(printf '%s' "$_schedule" | sed 's/^{//;s/}$//')"
+    printf '{"token_configured":%s,"enabled":%s,"interval_hours":%s,"startup_delay":%s,"log_level":"%s","zone":"%s","ttl":%s,"naming_template":"%s","auto_detect":%s,"threads":%s,"port":%s,"proxied":%s,"ip_source":"%s","candidate_count":%s,"test_all":%s,"preferred_provider":"%s",%s}\n' \
         "$_token_configured" \
         "$_enabled" \
         "$_interval" \
@@ -185,7 +226,13 @@ rpc_config_summary() {
         "$_tpl_esc" \
         "$_auto_detect" \
         "$_threads" \
-        "$_port"
+        "$_port" \
+        "$_proxied" \
+        "$_ip_source_esc" \
+        "$_candidate_count" \
+        "$_test_all" \
+        "$_preferred_provider_esc" \
+        "$_schedule_body"
 }
 
 rpc_start() {

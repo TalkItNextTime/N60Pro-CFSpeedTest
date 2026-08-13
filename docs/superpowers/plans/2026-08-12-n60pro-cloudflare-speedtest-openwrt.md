@@ -270,7 +270,7 @@ config cloudflare 'cloudflare'
         option ttl '1'
 
 config naming 'naming'
-        option template '{city}{isp}.{zone}'
+        option template 'cf'
         option auto_detect '1'
         option city_override ''
         option isp_override ''
@@ -283,7 +283,7 @@ config test 'test'
         option download_count '5'
         option download_seconds '10'
         option port '443'
-        option test_url 'https://cf.xiu2.xyz/url'
+        option test_url 'https://speed.cloudflare.com/__down?bytes=99000000'
         option max_latency_ms '200'
         option max_loss_ratio '0.2'
         option min_speed_mbps '0.01'
@@ -423,7 +423,7 @@ git commit -m "feat: prevent concurrent speed tests"
 
 Cover `深圳市 -> sz`, `Shenzhen -> sz`, `中国电信/China Telecom/CHINANET -> ct`, China Unicom `-> cu`, China Mobile `-> cm`, China Broadnet `-> cbn`, CERNET `-> cernet`, and unknown input `->` empty.
 
-Test field priority with manual city `gz`, automatic ISP `ct`, and cached values. Test template rendering `{city}{isp}.{zone}` to `szct.domain.com`. Reject uppercase output, underscores, empty labels, labels over 63 bytes, an FQDN over 253 bytes, and a template containing `{unknown}`.
+Test field priority with manual city `gz`, automatic ISP `ct`, and cached values. Test custom subdomain rendering `cf` to `cf.domain.com` without requiring city/ISP, and retain compatibility coverage for `{city}{isp}.{zone}` rendering to `szct.domain.com`. Reject uppercase output, underscores, empty labels, labels over 63 bytes, an FQDN over 253 bytes, and a template containing `{unknown}`.
 
 - [ ] **Step 2: Run and verify failure**
 

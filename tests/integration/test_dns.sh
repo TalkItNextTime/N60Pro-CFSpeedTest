@@ -25,6 +25,7 @@ export CFST_STATUS_FILE="$TMP/runtime/status.json"
 export CFST_API_TOKEN='test-token-secret-value'
 export CFST_ZONE='domain.com'
 export CFST_TTL=1
+export CFST_PROXIED=0
 export CFST_SLEEP_CMD='true'
 export CFST_NOW=1700000000
 export CFST_NOW_TEXT='2023-11-14 22:13:20'
@@ -85,6 +86,18 @@ request_log_text() {
 assert_auth_header_present() {
     log="$(request_log_text)"
     assert_contains "$log" '"Authorization": "Bearer test-token-secret-value"'
+}
+
+assert_bodies_orange_cloud_a() {
+    log="$(request_log_text)"
+    case "$log" in
+        *'"method": "POST"'*|*'"method": "PUT"'*)
+            case "$log" in
+                *'"proxied":true'*|*'"proxied": true'*) : ;;
+                *) fail "missing proxied true in body: $log" ;;
+            esac
+            ;;
+    esac
 }
 
 assert_bodies_gray_cloud_a() {
@@ -150,6 +163,18 @@ assert_contains "$req" '"method": "POST"'
 assert_bodies_gray_cloud_a
 assert_auth_header_present
 assert_token_not_in_plugin_log
+
+# --- orange-cloud mode is persisted in the DNS request body ---
+start_mock "$FIXTURES/create_record.json"
+CFST_PROXIED=1
+CFST_MANAGED_RECORD=''
+set +e
+cf_sync_dns 'szct.domain.com' '1.2.3.4'
+status="$?"
+set -e
+assert_eq "$status" "0"
+assert_bodies_orange_cloud_a
+CFST_PROXIED=0
 
 # --- same-value idempotence (no needless PUT) ---
 start_mock "$FIXTURES/idempotent_same.json"

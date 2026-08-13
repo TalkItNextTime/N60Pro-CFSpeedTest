@@ -7,6 +7,9 @@ on:
       - 'v*'
 
 # Pinned OpenWrt 24.10.2 mediatek/filogic SDK (must match scripts/build-sdk.sh defaults).
+permissions:
+  contents: write
+
 env:
   SDK_URL: https://downloads.openwrt.org/releases/24.10.2/targets/mediatek/filogic/openwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
   SDK_SHA256: df288284baa46d37cbc71812130b72617333f886f5c93c11f0548e28f0bb8309
@@ -64,6 +67,7 @@ jobs:
             dist/LICENSE
             dist/cloudflare-speedtest.version
             dist/CloudflareSpeedTest-*.tar.gz
-          generate_release_notes: true
+            dist/install.sh
+          body_path: .github/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

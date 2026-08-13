@@ -59,7 +59,26 @@ assert_contains "$js" '仅测速'
 assert_contains "$js" '停止当前任务'
 
 # --- Token password + set_token path ---
-assert_contains "$js" 'PasswordValue'
+assert_contains "$js" "form.Value, '_api_token'"
+assert_contains "$js" "s.taboption('basic', form.Value, '_api_token'"
+assert_contains "$js" 'o.password = true;'
+# The log controls live only in the logs tab, and the view exposes LuCI's save footer.
+assert_contains "$js" "'_logs_panel'"
+assert_contains "$js" 'renderLogsPanel(view)'
+assert_contains "$js" "form.ListValue, 'proxied'"
+assert_contains "$js" "o.value('0'"
+assert_contains "$js" "o.value('1'"
+assert_contains "$js" 'handleSaveApply: function'
+assert_contains "$js" 'handleSave: function'
+assert_contains "$js" 'handleReset: function'
+if printf '%s\n' "$js" | grep -F "var logs = renderLogsPanel(view)" >/dev/null 2>&1; then
+	fail 'runtime logs must not be rendered below the configuration map'
+fi
+# LuCI 24.10 form.Map.render() is async; never insert its Promise as a DOM child.
+assert_contains "$js" 'Promise.resolve(map.render())'
+if printf '%s\n' "$js" | grep -E '\[ map\.render\(\) \]' >/dev/null 2>&1; then
+	fail 'map.render() must be resolved before DOM insertion'
+fi
 assert_contains "$js" '已配置；留空保持不变'
 assert_contains "$js" 'set_token'
 # Must not load secret via ordinary UCI of api_token into form as plain value
@@ -82,6 +101,9 @@ for code in CONFIG_TOKEN_MISSING GEO_ALL_PROVIDERS_FAILED CFST_TIMEOUT RESULT_NO
 done
 assert_contains "$js" 'error_code'
 assert_contains "$js" 'ui.addNotification'
+assert_contains "$js" 'addDismissibleNotification'
+assert_contains "$js" 'testing: true'
+assert_contains "$js" '_startPending'
 
 # --- form.Map with five tabs ---
 assert_contains "$js" "form.Map('cloudflare-speedtest'"
@@ -114,6 +136,18 @@ assert_contains "$js" '橙云'
 # --- last_tested vs last_published ---
 assert_contains "$js" 'last_tested'
 assert_contains "$js" 'last_published'
+assert_contains "$js" 'network_cache'
+assert_contains "$js" 'localNetwork'
+assert_contains "$js" 'formatLocalGeo'
+assert_contains "$js" 'city_override'
+assert_contains "$js" 'isp_override'
+assert_contains "$js" 'fallback_city'
+assert_contains "$js" 'fallback_isp'
+assert_contains "$js" '\u81ea\u52a8\u8bc6\u522b\u57ce\u5e02'
+assert_contains "$js" '\u57ce\u5e02\u8986\u76d6'
+assert_contains "$js" '\u8fd0\u8425\u5546\u8986\u76d6'
+assert_contains "$js" '\u56de\u9000\u57ce\u5e02\u4ee3\u7801'
+assert_contains "$js" '\u56de\u9000\u8fd0\u8425\u5546\u4ee3\u7801'
 
 # --- logs: bounded + clear_logs only (no arbitrary file/shell) ---
 assert_contains "$js" 'clear_logs'

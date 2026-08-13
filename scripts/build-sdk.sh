@@ -134,8 +134,9 @@ find "$SDK_ROOT/bin" -type f \( -name 'Packages' -o -name 'Packages.gz' \) 2>/de
 		cp -f "$idx" "$OUTPUT_DIR/$(basename "$(dirname "$idx")")-$(basename "$idx")" 2>/dev/null || true
 	done
 
-# Source pin, GPL license, and upstream source archive for release compliance
+# Source pin, GPL license, versioned installer, and upstream source archive for release compliance
 cp -f "$ROOT/upstream/cloudflare-speedtest.version" "$OUTPUT_DIR/cloudflare-speedtest.version"
+cp -f "$ROOT/scripts/install.sh" "$OUTPUT_DIR/install.sh"
 if [ -f "$ROOT/LICENSE" ]; then
 	cp -f "$ROOT/LICENSE" "$OUTPUT_DIR/LICENSE"
 else

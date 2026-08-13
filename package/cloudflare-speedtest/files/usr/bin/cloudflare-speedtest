@@ -33,6 +33,10 @@ cfst_source_runner() {
     # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/geoip.sh"
     # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/preferred.sh"
+    # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/candidates.sh"
+    # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/result.sh"
     # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/dns.sh"
@@ -123,7 +127,7 @@ cmd_result() {
     if [ -f "$CFST_STATE_FILE" ]; then
         cat "$CFST_STATE_FILE"
     else
-        printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null}'
+        printf '%s\n' '{"schema_version":1,"last_published":null,"last_tested":null,"geo_cache":null,"managed_record":null,"network_cache":null}'
     fi
 }
 

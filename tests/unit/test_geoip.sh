@@ -18,8 +18,6 @@ export CFST_RUNTIME_DIR="$TMP/runtime"
 export CFST_STATUS_FILE="$CFST_RUNTIME_DIR/status.json"
 export CFST_STATE_FILE="$TMP/etc/state.json"
 export CFST_GEO_TIMEOUT=2
-export CFST_GEO_CACHE_TTL_HOURS=72
-export CFST_GEO_PROVIDERS='ipapi.co ipwho.is'
 export CFST_AUTO_DETECT=1
 export CFST_CITY_OVERRIDE=''
 export CFST_ISP_OVERRIDE=''
@@ -53,32 +51,17 @@ assert_status 1 validate_public_ipv4 '192.0.2.1'
 assert_status 1 validate_public_ipv4 'not-an-ip'
 assert_status 1 validate_public_ipv4 ''
 
-# --- parse_ipapi ---
-parsed="$(parse_ipapi "$CFST_ROOT/tests/fixtures/geoip/ipapi-shenzhen-telecom.json")"
-assert_eq "$parsed" '{"ip":"203.0.113.10","city":"深圳","isp":"中国电信","source":"ipapi.co"}'
+# --- UAPIS response parsing ---
+cat > "$TMP/myip.json" <<'EOF'
+{"ip":"119.123.53.235","region":"中国 广东 深圳","isp":"Chinanet","asn":"AS4134","llc":"电信"}
+EOF
+parsed="$(parse_uapi_network "$TMP/myip.json")"
+assert_eq "$parsed" '{"ip":"119.123.53.235","region":"中国 广东 深圳","city":"深圳","isp":"Chinanet","asn":"AS4134","llc":"电信","source":"uapis.cn"}'
+assert_status 1 parse_uapi_network "$CFST_ROOT/tests/fixtures/geoip/invalid.json"
 
-set +e
-parse_ipapi "$CFST_ROOT/tests/fixtures/geoip/invalid.json" >/dev/null
-status="$?"
-set -e
-assert_eq "$status" "1"
-
-# --- parse_ipwhois ---
-parsed="$(parse_ipwhois "$CFST_ROOT/tests/fixtures/geoip/ipwhois-shenzhen-telecom.json")"
-assert_eq "$parsed" '{"ip":"203.0.113.10","city":"深圳","isp":"中国电信","source":"ipwho.is"}'
-
-set +e
-parse_ipwhois "$CFST_ROOT/tests/fixtures/geoip/invalid.json" >/dev/null
-status="$?"
-set -e
-assert_eq "$status" "1"
-
-# --- mock curl: provider one fails, provider two succeeds ---
+# --- UAPIS-only myip request and city/ISP mapping ---
 cat > "$TMP/bin/curl" <<'EOF'
 #!/bin/sh
-# record args
-printf '%s\n' "$*" >> "${CFST_CURL_LOG:-/dev/null}"
-# honor noproxy and cleared proxies expectations by always succeeding for second host
 url=''
 outfile=''
 prev=''
@@ -93,27 +76,28 @@ for arg in "$@"; do
     prev="$arg"
 done
 case "$url" in
-    *ipapi.co*)
-        exit 22
-        ;;
-    *ipwho.is*|*ipwhois*)
-        if [ -n "$outfile" ]; then
-            cat "$CFST_ROOT/tests/fixtures/geoip/ipwhois-public.json" > "$outfile"
-        else
-            cat "$CFST_ROOT/tests/fixtures/geoip/ipwhois-public.json"
-        fi
+    *uapis.cn/api/v1/network/myip*)
+        printf '%s\n' "$url" >> "${CFST_CURL_LOG:-/dev/null}"
+        cat "$CFST_ROOT/tests/fixtures/geoip/uapis-myip-shenzhen.json" > "$outfile"
         exit 0
         ;;
-    *)
-        exit 1
+    *uapis.cn/api/v1/network/ipinfo?ip=*)
+        printf '%s\n' "$url" >> "${CFST_CURL_LOG:-/dev/null}"
+        cat "$CFST_ROOT/tests/fixtures/geoip/uapis-myip-shenzhen.json" > "$outfile"
+        exit 0
         ;;
+    *ipapi.co*|*ipwho.is*)
+        echo "unexpected legacy geo provider: $url" >&2
+        exit 22
+        ;;
+    *) exit 22 ;;
 esac
 EOF
 chmod +x "$TMP/bin/curl"
 export PATH="$TMP/bin:$PATH"
 export CFST_CURL_LOG="$TMP/curl.log"
 : > "$CFST_CURL_LOG"
-
+CFST_NETWORK_CACHE=''
 CFST_GEO_CACHE=''
 CFST_CITY_OVERRIDE=''
 CFST_ISP_OVERRIDE=''
@@ -124,108 +108,39 @@ identity="$(resolve_network_identity)"
 status="$?"
 set -e
 assert_eq "$status" "0"
-assert_contains "$identity" '"ip":"1.1.1.1"'
+assert_contains "$identity" '"ip":"119.123.53.235"'
 assert_contains "$identity" '"city":"sz"'
 assert_contains "$identity" '"isp":"ct"'
-assert_contains "$identity" '"source":"ipwho.is"'
-# curl must clear proxies / use noproxy
-assert_contains "$(tr '\n' ' ' < "$CFST_CURL_LOG")" '--noproxy'
+assert_contains "$identity" '"source":"uapis.cn"'
+assert_contains "$(tr '\n' ' ' < "$CFST_CURL_LOG")" 'uapis.cn/api/v1/network/myip'
 
-# --- all providers fail → GEO_ALL_PROVIDERS_FAILED without override/cache/fallback ---
+# --- fresh network cache avoids another myip request ---
+CFST_NETWORK_CACHE='{"ip":"119.123.53.235","region":"中国 广东 深圳","city":"深圳","isp":"Chinanet","asn":"AS4134","llc":"电信","queried_at":1699999000}'
+: > "$CFST_CURL_LOG"
+identity="$(resolve_network_identity)"
+assert_contains "$identity" '"city":"sz"'
+assert_contains "$identity" '"isp":"ct"'
+[ ! -s "$CFST_CURL_LOG" ] || fail 'fresh network cache must not query myip'
+
+# --- expired network cache: only UAPIS myip is attempted ---
+CFST_NETWORK_CACHE='{"ip":"119.123.53.235","city":"sz","isp":"ct","queried_at":1600000000}'
+identity="$(resolve_network_identity)"
+assert_contains "$identity" '"city":"sz"'
+assert_contains "$identity" '"isp":"ct"'
+assert_contains "$(tr '\n' ' ' < "$CFST_CURL_LOG")" 'uapis.cn/api/v1/network/myip'
+
+# --- manual overrides remain explicit configuration, not remote fallback ---
 cat > "$TMP/bin/curl" <<'EOF'
 #!/bin/sh
 exit 22
 EOF
 chmod +x "$TMP/bin/curl"
-CFST_GEO_CACHE=''
-set +e
-resolve_network_identity >/dev/null
-status="$?"
-set -e
-assert_eq "$status" "41"
-assert_eq "$CFST_ERROR_CODE" "GEO_ALL_PROVIDERS_FAILED"
-
-# --- manual field overrides allow success without providers ---
+CFST_NETWORK_CACHE=''
 CFST_CITY_OVERRIDE='sz'
 CFST_ISP_OVERRIDE='ct'
-set +e
 identity="$(resolve_network_identity)"
-status="$?"
-set -e
-assert_eq "$status" "0"
 assert_contains "$identity" '"city":"sz"'
 assert_contains "$identity" '"isp":"ct"'
 assert_contains "$identity" '"source":"override"'
 
-# --- unexpired cache fallback ---
-CFST_CITY_OVERRIDE=''
-CFST_ISP_OVERRIDE=''
-# cached_at within TTL of CFST_NOW=1700000000 (72h = 259200s)
-CFST_GEO_CACHE='{"ip":"8.8.4.4","city":"sz","isp":"ct","source":"cache","cached_at":1699990000}'
-set +e
-identity="$(resolve_network_identity)"
-status="$?"
-set -e
-assert_eq "$status" "0"
-assert_contains "$identity" '"city":"sz"'
-assert_contains "$identity" '"isp":"ct"'
-assert_contains "$identity" '"source":"cache"'
-
-# --- expired cache + fallback labels ---
-CFST_GEO_CACHE='{"ip":"8.8.4.4","city":"sz","isp":"ct","source":"cache","cached_at":1600000000}'
-CFST_FALLBACK_CITY='bj'
-CFST_FALLBACK_ISP='cm'
-set +e
-identity="$(resolve_network_identity)"
-status="$?"
-set -e
-assert_eq "$status" "0"
-assert_contains "$identity" '"city":"bj"'
-assert_contains "$identity" '"isp":"cm"'
-assert_contains "$identity" '"source":"fallback"'
-
-# --- provider one success with public IP fixture ---
-cat > "$TMP/bin/curl" <<'EOF'
-#!/bin/sh
-url=''
-outfile=''
-prev=''
-for arg in "$@"; do
-    case "$prev" in
-        --url) url="$arg" ;;
-        --output|-o) outfile="$arg" ;;
-    esac
-    case "$arg" in
-        http://*|https://*) url="$arg" ;;
-    esac
-    prev="$arg"
-done
-case "$url" in
-    *ipapi.co*)
-        if [ -n "$outfile" ]; then
-            cat "$CFST_ROOT/tests/fixtures/geoip/ipapi-public.json" > "$outfile"
-        else
-            cat "$CFST_ROOT/tests/fixtures/geoip/ipapi-public.json"
-        fi
-        exit 0
-        ;;
-    *)
-        exit 22
-        ;;
-esac
-EOF
-chmod +x "$TMP/bin/curl"
-CFST_GEO_CACHE=''
-CFST_CITY_OVERRIDE=''
-CFST_ISP_OVERRIDE=''
-CFST_FALLBACK_CITY=''
-CFST_FALLBACK_ISP=''
-set +e
-identity="$(resolve_network_identity)"
-status="$?"
-set -e
-assert_eq "$status" "0"
-assert_contains "$identity" '"ip":"8.8.8.8"'
-assert_contains "$identity" '"city":"sz"'
-assert_contains "$identity" '"isp":"ct"'
-assert_contains "$identity" '"source":"ipapi.co"'
+printf '%s\n' 'geoip tests passed (UAPIS-only)'

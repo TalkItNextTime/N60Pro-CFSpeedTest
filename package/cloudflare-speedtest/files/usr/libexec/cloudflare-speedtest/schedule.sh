@@ -9,6 +9,7 @@
 : "${CFST_WAN_INTERFACE:=wan}"
 : "${CFST_BIN:=/usr/bin/cloudflare-speedtest}"
 : "${CFST_CRON_MARKER:=# cloudflare-speedtest}"
+: "${CFST_DEFERRED_SCHEDULE_FILE:=/etc/cloudflare-speedtest/schedule-deferred}"
 
 schedule_now() {
     if [ -n "${CFST_NOW:-}" ]; then
@@ -75,11 +76,144 @@ validate_interval_hours() {
     esac
 }
 
+schedule_next_run_epoch() {
+    interval="${1:-6}"
+    minute="${2:-17}"
+    hours="${3:-}"
+    case "$interval:$minute" in *[!0-9:]*|*:|:*) return 1 ;; esac
+    now="$(schedule_now)"
+    case "$now" in ''|*[!0-9]*) return 1 ;; esac
+    hour="$(date +%H)"
+    current_minute="$(date +%M)"
+    second="$(date +%S)"
+    hour="$(printf '%s\n' "$hour" | awk '{print $1 + 0}')"
+    current_minute="$(printf '%s\n' "$current_minute" | awk '{print $1 + 0}')"
+    second="$(printf '%s\n' "$second" | awk '{print $1 + 0}')"
+    day_start=$((now - hour * 3600 - current_minute * 60 - second))
+
+    # The normal schedule is */N. A manual successful DNS publish uses an
+    # explicit list (e.g. 2,8,14,20) re-anchored from the publish time.
+    if [ -n "$hours" ]; then
+        case "$hours" in *[!0-9,]*|,*|*,,*) return 1 ;; esac
+        day_offset=0
+        while [ "$day_offset" -le 1 ]; do
+            for h in $(printf '%s' "$hours" | tr ',' ' '); do
+                candidate=$((day_start + day_offset * 86400 + h * 3600 + minute * 60))
+                if [ "$candidate" -gt "$now" ]; then
+                    printf '%s\n' "$candidate"
+                    return 0
+                fi
+            done
+            day_offset=$((day_offset + 1))
+        done
+        return 1
+    fi
+
+    h=0
+    while [ "$h" -lt 24 ]; do
+        if [ $((h % interval)) -eq 0 ] && { [ "$h" -gt "$hour" ] || { [ "$h" -eq "$hour" ] && [ "$minute" -gt "$current_minute" ]; }; }; then
+            printf '%s\n' $((day_start + h * 3600 + minute * 60))
+            return 0
+        fi
+        h=$((h + 1))
+    done
+    printf '%s\n' $((day_start + 86400 + minute * 60))
+}
+
 schedule_cron_line() {
     interval="$1"
     minute="$2"
-    printf '%s */%s * * * %s run --mode test-and-update --trigger cron %s' \
-        "$minute" "$interval" "$CFST_BIN" "$CFST_CRON_MARKER"
+    hours="${3:-*/$interval}"
+    printf '%s %s * * * %s run --mode test-and-update --trigger cron %s' \
+        "$minute" "$hours" "$CFST_BIN" "$CFST_CRON_MARKER"
+}
+
+schedule_date_field() {
+    epoch="$1"
+    format="$2"
+    # Callers pass a strftime field such as M or H. Prefix %, otherwise
+    # BusyBox/GNU date prints the literal field letter (e.g. "M") and a
+    # deferred cron schedule incorrectly becomes minute/hour zero.
+    date -d "@$epoch" "+%$format" 2>/dev/null || date -r "$epoch" "+%$format" 2>/dev/null
+}
+
+schedule_hour_list() {
+    interval="$1"
+    anchor_hour="$2"
+    case "$interval:$anchor_hour" in *[!0-9:]*|*:|:*) return 1 ;; esac
+    [ "$anchor_hour" -ge 0 ] 2>/dev/null && [ "$anchor_hour" -le 23 ] 2>/dev/null || return 1
+    list=''
+    hour=0
+    while [ "$hour" -lt 24 ]; do
+        if [ $(((hour - anchor_hour + 24) % interval)) -eq 0 ]; then
+            if [ -n "$list" ]; then list="$list,$hour"; else list="$hour"; fi
+        fi
+        hour=$((hour + 1))
+    done
+    printf '%s\n' "$list"
+}
+
+# A successful manual DNS publish re-anchors the repeating cron schedule.
+# Keep that anchor outside /tmp so an init/LuCI reload cannot immediately
+# replace it with the generic */N line.
+schedule_deferred_line() {
+    requested_interval="$1"
+    [ -f "$CFST_DEFERRED_SCHEDULE_FILE" ] || return 1
+    IFS=' ' read -r due stored_interval < "$CFST_DEFERRED_SCHEDULE_FILE" || return 1
+    case "$due:$stored_interval:$requested_interval" in *[!0-9:]*|*:|:*) return 1 ;; esac
+    [ "$stored_interval" = "$requested_interval" ] || return 1
+    minute="$(schedule_date_field "$due" M)" || return 1
+    anchor_hour="$(schedule_date_field "$due" H)" || return 1
+    minute="$(printf '%s\n' "$minute" | awk '{ print $1 + 0 }')"
+    anchor_hour="$(printf '%s\n' "$anchor_hour" | awk '{ print $1 + 0 }')"
+    hours="$(schedule_hour_list "$requested_interval" "$anchor_hour")" || return 1
+    schedule_cron_line "$requested_interval" "$minute" "$hours"
+}
+
+schedule_store_deferred() {
+    due="$1"
+    interval="$2"
+    case "$due:$interval" in *[!0-9:]*|*:|:*) return 1 ;; esac
+    directory="${CFST_DEFERRED_SCHEDULE_FILE%/*}"
+    [ "$directory" = "$CFST_DEFERRED_SCHEDULE_FILE" ] && directory='.'
+    mkdir -p "$directory" || return 1
+    temporary="${CFST_DEFERRED_SCHEDULE_FILE}.tmp.$$"
+    printf '%s %s\n' "$due" "$interval" > "$temporary" || return 1
+    chmod 0600 "$temporary" 2>/dev/null || true
+    mv -f "$temporary" "$CFST_DEFERRED_SCHEDULE_FILE" || return 1
+}
+
+schedule_clear_deferred() {
+    rm -f "$CFST_DEFERRED_SCHEDULE_FILE"
+}
+
+# Re-anchor the recurring cron hours after a successful manual DNS publication.
+# All accepted intervals divide 24, so a comma-separated hour list preserves
+# exactly one interval between executions across midnight.
+schedule_defer_after_manual_success() {
+    CFST_SCHEDULE_NEXT_RUN_AT=''
+    [ "${CFST_ENABLED:-1}" = "1" ] || return 0
+    interval="${CFST_INTERVAL_HOURS:-6}"
+    validate_interval_hours "$interval" || return $?
+    now="$(schedule_now)"
+    case "$now" in ''|*[!0-9]*) return 1 ;; esac
+    # Cron has minute resolution: never schedule before a full interval elapsed.
+    due=$((now + interval * 3600 + 59))
+    due=$(((due / 60) * 60))
+    minute="$(schedule_date_field "$due" M)" || return 1
+    anchor_hour="$(schedule_date_field "$due" H)" || return 1
+    minute="$(printf '%s\n' "$minute" | awk '{ print $1 + 0 }')"
+    anchor_hour="$(printf '%s\n' "$anchor_hour" | awk '{ print $1 + 0 }')"
+    hours="$(schedule_hour_list "$interval" "$anchor_hour")" || return 1
+    line="$(schedule_cron_line "$interval" "$minute" "$hours")"
+    existing="$(schedule_strip_marked | schedule_trim_trailing_blanks)"
+    if [ -n "$existing" ]; then content="$(printf '%s\n%s' "$existing" "$line")"; else content="$line"; fi
+    schedule_write_crontab "$content" || return 1
+    # Persist after the cron line is in place so later apply-schedule keeps it.
+    schedule_store_deferred "$due" "$interval" || return 1
+    CFST_SCHEDULE_NEXT_RUN_AT="$due"
+    export CFST_SCHEDULE_NEXT_RUN_AT
+    return 0
 }
 
 schedule_strip_marked() {
@@ -159,7 +293,10 @@ write_cron() {
     validate_interval_hours "$interval" || return $?
 
     minute="$(schedule_minute "$(schedule_device_hostname)")"
-    line="$(schedule_cron_line "$interval" "$minute")"
+    # Retain a manual-success anchor for the same interval across service
+    # reloads; without this, procd overwrites the deferred cron line with */N.
+    line="$(schedule_deferred_line "$interval" 2>/dev/null || true)"
+    [ -n "$line" ] || line="$(schedule_cron_line "$interval" "$minute")"
 
     existing="$(schedule_strip_marked | schedule_trim_trailing_blanks)"
     if [ -n "$existing" ]; then
@@ -180,7 +317,8 @@ remove_cron() {
     fi
 
     existing="$(schedule_strip_marked | schedule_trim_trailing_blanks)"
-    schedule_write_crontab "$existing"
+    schedule_write_crontab "$existing" || return 1
+    schedule_clear_deferred
 }
 
 hotplug_schedule() {

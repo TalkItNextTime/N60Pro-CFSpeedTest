@@ -32,9 +32,17 @@ ensure_section cloudflare cloudflare
 ensure_option cloudflare api_token ''
 ensure_option cloudflare zone ''
 ensure_option cloudflare ttl 1
+ensure_option cloudflare proxied 0
 
 ensure_section naming naming
-ensure_option naming template '{city}{isp}.{zone}'
+# Migrate the shipped legacy default, but preserve an administrator's custom value.
+legacy_template='{city}{isp}.{zone}'
+current_template="$(uci -q get "cloudflare-speedtest.naming.template" 2>/dev/null || printf '')"
+if [ "$current_template" = "$legacy_template" ]; then
+	uci -q set cloudflare-speedtest.naming.template=cf || true
+else
+	ensure_option naming template cf
+fi
 ensure_option naming auto_detect 1
 ensure_option naming city_override ''
 ensure_option naming isp_override ''
@@ -47,17 +55,27 @@ ensure_option test attempts 4
 ensure_option test download_count 5
 ensure_option test download_seconds 10
 ensure_option test port 443
-ensure_option test test_url 'https://cf.xiu2.xyz/url'
+ensure_option test test_url 'https://speed.cloudflare.com/__down?bytes=99000000'
 ensure_option test max_latency_ms 200
 ensure_option test max_loss_ratio 0.2
 ensure_option test min_speed_mbps 0.01
 ensure_option test task_timeout_seconds 900
 ensure_option test ip_file '/usr/share/cloudflare-speedtest/ip.txt'
+ensure_option test ip_source cidr
+ensure_option test candidate_count 0
+ensure_option test test_all 0
 
 ensure_section geo geo
-ensure_option geo provider_order 'ipwho.is ipapi.co'
 ensure_option geo request_timeout 8
 ensure_option geo cache_ttl_hours 72
+
+ensure_section preferred preferred
+ensure_option preferred provider auto
+ensure_option preferred url_ct 'https://cf.090227.xyz/ct?ips=20'
+ensure_option preferred url_cu 'https://cf.090227.xyz/cu?ips=20'
+ensure_option preferred url_cmcc 'https://cf.090227.xyz/cmcc?ips=20'
+ensure_option preferred url_custom ''
+ensure_option preferred timeout 15
 
 uci -q commit cloudflare-speedtest 2>/dev/null || true
 chmod 0600 "$CONFIG" 2>/dev/null || true

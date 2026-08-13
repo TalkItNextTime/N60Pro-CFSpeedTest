@@ -81,12 +81,14 @@ state_save_persistent() {
     last_tested="${CFST_LAST_TESTED:-null}"
     geo_cache="${CFST_GEO_CACHE:-null}"
     managed_record="${CFST_MANAGED_RECORD:-null}"
+    network_cache="${CFST_NETWORK_CACHE:-null}"
     [ -n "$last_published" ] || last_published=null
     [ -n "$last_tested" ] || last_tested=null
     [ -n "$geo_cache" ] || geo_cache=null
     [ -n "$managed_record" ] || managed_record=null
-    printf '{"schema_version":1,"last_published":%s,"last_tested":%s,"geo_cache":%s,"managed_record":%s}\n' \
-        "$last_published" "$last_tested" "$geo_cache" "$managed_record" | atomic_write "$CFST_STATE_FILE"
+    [ -n "$network_cache" ] || network_cache=null
+    printf '{"schema_version":1,"last_published":%s,"last_tested":%s,"geo_cache":%s,"managed_record":%s,"network_cache":%s}\n' \
+        "$last_published" "$last_tested" "$geo_cache" "$managed_record" "$network_cache" | atomic_write "$CFST_STATE_FILE"
 }
 
 state_json_value() {
@@ -98,6 +100,7 @@ state_load_persistent() {
     CFST_LAST_TESTED=''
     CFST_GEO_CACHE=''
     CFST_MANAGED_RECORD=''
+    CFST_NETWORK_CACHE=''
     CFST_STATE_CORRUPT=0
     [ -f "$CFST_STATE_FILE" ] || return 0
 
@@ -111,5 +114,6 @@ state_load_persistent() {
     CFST_LAST_TESTED="$(state_json_value last_tested || true)"
     CFST_GEO_CACHE="$(state_json_value geo_cache || true)"
     CFST_MANAGED_RECORD="$(state_json_value managed_record || true)"
+    CFST_NETWORK_CACHE="$(state_json_value network_cache || true)"
     return 0
 }

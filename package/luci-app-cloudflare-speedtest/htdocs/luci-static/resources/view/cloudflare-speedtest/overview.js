@@ -92,6 +92,7 @@ var ERROR_HINTS = {
 var ACTIVE_PHASES = {
 	preparing: true,
 	detecting_network: true,
+	testing: true,
 	testing_latency: true,
 	testing_download: true,
 	validating_result: true,
@@ -103,6 +104,22 @@ function isActivePhase(phase) {
 	return !!(phase && ACTIVE_PHASES[phase]);
 }
 
+function addDismissibleNotification(title, content, level) {
+	var msg = ui.addNotification(title, content, level);
+	if (msg) {
+		var close = msg.querySelector('button');
+		if (close) {
+			close.addEventListener('click', function() {
+				window.setTimeout(function() {
+					if (msg.parentNode)
+						msg.parentNode.removeChild(msg);
+				}, 0);
+			});
+		}
+	}
+	return msg;
+}
+
 function notifyError(res) {
 	var code = (res && (res.error_code || res.code)) || '';
 	var backend = (res && (res.error_message || res.message)) || '';
@@ -112,17 +129,79 @@ function notifyError(res) {
 		text += ' [' + code + ']';
 	if (backend)
 		text += ' — ' + backend;
-	ui.addNotification(null, E('p', {}, text), 'danger');
+	addDismissibleNotification(null, E('p', {}, text), 'danger');
 }
 
 function notifyOk(message) {
-	ui.addNotification(null, E('p', {}, message), 'info');
+	addDismissibleNotification(null, E('p', {}, message), 'info');
 }
 
 function fmtValue(v, fallback) {
 	if (v === null || v === undefined || v === '')
 		return fallback || '—';
 	return String(v);
+}
+
+function fmtDateTime(v) {
+	if (v === null || v === undefined || v === '') return _('\u672a\u5b89\u6392');
+	var n = Number(v);
+	if (!isFinite(n) || n <= 0) return String(v);
+	try { return new Date(n * 1000).toLocaleString(); } catch (e) { return String(v); }
+}
+
+function formatNextRun(status, summary) {
+	status = status || {};
+	summary = summary || {};
+	if (status.schedule_enabled === false || summary.schedule_enabled === false)
+		return _('\u5df2\u7981\u7528');
+	return fmtDateTime(status.next_run_at || status.next_run || summary.next_run_at);
+}
+
+function formatGeo(obj) {
+	if (!obj || typeof obj !== 'object')
+		return _('\u672a\u67e5\u8be2');
+	var region = obj.region || '';
+	var city = obj.city || '';
+	var isp = obj.isp || '';
+	var asn = obj.asn || '';
+	if (region)
+		return region + (isp ? ' / ' + isp : '') + (asn ? ' / ' + asn : '');
+	var parts = [];
+	if (city) parts.push(city);
+	if (isp) parts.push(isp);
+	if (asn) parts.push(asn);
+	return parts.length ? parts.join(' / ') : _('\u672a\u67e5\u8be2');
+}
+
+function formatLocalGeo(obj) {
+	if (!obj || typeof obj !== 'object')
+		return _('\u672a\u67e5\u8be2');
+
+	/* This card describes the local public network, never the selected
+	 * Cloudflare node. UAPIS myip supplies the Chinese region and llc fields;
+	 * the maps keep old cached city/ISP codes readable after an upgrade. */
+	var cityNames = {
+		bj: '\u5317\u4eac', sh: '\u4e0a\u6d77', tj: '\u5929\u6d25', cq: '\u91cd\u5e86',
+		sz: '\u6df1\u5733', dg: '\u4e1c\u839e', gz: '\u5e7f\u5dde', hz: '\u676d\u5dde',
+		nj: '\u5357\u4eac', su: '\u82cf\u5dde', wh: '\u6b66\u6c49', cd: '\u6210\u90fd',
+		xa: '\u897f\u5b89', cs: '\u957f\u6c99', fz: '\u798f\u5dde', xm: '\u53a6\u95e8'
+	};
+	var ispNames = {
+		ct: '\u7535\u4fe1', cu: '\u8054\u901a', cm: '\u79fb\u52a8', cmcc: '\u79fb\u52a8',
+		cernet: '\u6559\u80b2\u7f51', cbn: '\u5e7f\u7535'
+	};
+	var region = String(obj.region || '').trim();
+	var city = String(obj.city || '').trim();
+	var isp = String(obj.llc || '').trim() || String(obj.isp || '').trim();
+	if (region) {
+		var regionParts = region.split(/\s+/);
+		city = regionParts[regionParts.length - 1] || city;
+	}
+	city = cityNames[city.toLowerCase()] || city.replace(/\u5e02$/, '');
+	isp = ispNames[isp.toLowerCase()] || isp;
+	if (city && isp)
+		return city + isp;
+	return city || isp || _('\u672a\u67e5\u8be2');
 }
 
 function fmtObjectField(obj, key) {
@@ -138,11 +217,15 @@ function renderStatusCards(status, result, summary) {
 
 	var phase = status.phase || 'idle';
 	var message = status.message || '';
-	var nextRun = status.next_run_at || status.next_run || summary.next_run_at || '—';
+	var nextRun = formatNextRun(status, summary);
 	var tested = result.last_tested || {};
 	var published = result.last_published || {};
 	var managed = result.managed_record || {};
-	var geo = result.geo_cache || status.geo || {};
+	/* Keep local network ownership separate from the preferred Cloudflare node.
+	 * network_cache is populated from the local public-IP lookup; geo_cache is
+	 * retained as a backward-compatible fallback for older state files. */
+	var localNetwork = result.network_cache || {};
+	var preferred = result.last_published || result.last_tested || {};
 
 	var cardRun = E('div', { 'class': 'status-card cbi-section' }, [
 		E('h3', {}, _('运行状态')),
@@ -156,7 +239,7 @@ function renderStatusCards(status, result, summary) {
 		]),
 		E('div', { 'class': 'cbi-value' }, [
 			E('label', { 'class': 'cbi-value-title' }, _('下次任务')),
-			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-next-run' }, fmtValue(nextRun))
+			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-next-run' }, nextRun)
 		])
 	]);
 
@@ -175,6 +258,10 @@ function renderStatusCards(status, result, summary) {
 			E('label', { 'class': 'cbi-value-title' }, _('最近发布 IP')),
 			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-last-published-ip' }, fmtObjectField(published, 'ip'))
 		]),
+		E('div', { 'class': 'cbi-value' }, [
+			E('label', { 'class': 'cbi-value-title' }, _('\u4f18\u9009\u8282\u70b9\u5f52\u5c5e')),
+			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-preferred-geo' }, formatGeo(preferred))
+		]),
 		E('p', { 'class': 'cbi-value-description' },
 			_('last_tested 为最近一次测速结果；last_published 为已写入 DNS 的结果，二者可能不同。'))
 	]);
@@ -184,7 +271,7 @@ function renderStatusCards(status, result, summary) {
 		E('div', { 'class': 'cbi-value' }, [
 			E('label', { 'class': 'cbi-value-title' }, _('归属')),
 			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-geo' },
-				fmtObjectField(geo, 'city') + ' / ' + fmtObjectField(geo, 'isp'))
+				formatLocalGeo(localNetwork))
 		]),
 		E('div', { 'class': 'cbi-value' }, [
 			E('label', { 'class': 'cbi-value-title' }, _('管理记录')),
@@ -203,8 +290,8 @@ function renderStatusCards(status, result, summary) {
 	]);
 }
 
-function setButtonState(btnStartUpdate, btnStartOnly, btnStop, phase) {
-	var active = isActivePhase(phase);
+function setButtonState(btnStartUpdate, btnStartOnly, btnStop, phase, startPending) {
+	var active = isActivePhase(phase) || !!startPending;
 	btnStartUpdate.disabled = active;
 	btnStartOnly.disabled = active;
 	btnStop.disabled = !active;
@@ -227,7 +314,9 @@ function updateCardDom(status, result, summary) {
 	var tested = result.last_tested || {};
 	var published = result.last_published || {};
 	var managed = result.managed_record || {};
-	var geo = result.geo_cache || status.geo || {};
+	/* This card is for the local public network, not the selected node. */
+	var localNetwork = result.network_cache || {};
+	var preferred = result.last_published || result.last_tested || {};
 
 	var setText = function(id, text) {
 		var el = document.getElementById(id);
@@ -237,12 +326,14 @@ function updateCardDom(status, result, summary) {
 
 	setText('cfst-phase', fmtValue(status.phase, 'idle'));
 	setText('cfst-message', fmtValue(status.message, _('空闲')));
-	setText('cfst-next-run', fmtValue(status.next_run_at || status.next_run || summary.next_run_at));
+	setText('cfst-next-run', formatNextRun(status, summary));
 	setText('cfst-last-tested-ip', fmtObjectField(tested, 'ip'));
 	setText('cfst-last-tested-metrics',
 		fmtObjectField(tested, 'latency_ms') + ' ms / ' + fmtObjectField(tested, 'speed_mbps') + ' Mbps');
 	setText('cfst-last-published-ip', fmtObjectField(published, 'ip'));
-	setText('cfst-geo', fmtObjectField(geo, 'city') + ' / ' + fmtObjectField(geo, 'isp'));
+	var preferredNode = published.region || published.city || published.isp ? published : tested;
+	setText('cfst-preferred-geo', formatGeo(preferredNode));
+	setText('cfst-geo', formatLocalGeo(localNetwork));
 	setText('cfst-managed', fmtObjectField(managed, 'name') || fmtObjectField(published, 'hostname') || '—');
 	setText('cfst-token-state', summary.token_configured ? _('已配置') : _('未配置'));
 }
@@ -270,44 +361,59 @@ function renderActions(view) {
 	}, _('验证凭据'));
 
 	btnStartUpdate.addEventListener('click', function() {
-		btnStartUpdate.disabled = true;
-		btnStartOnly.disabled = true;
+		view._startPending = true;
+		view._startObserved = false;
+		setButtonState(btnStartUpdate, btnStartOnly, btnStop, (view._lastStatus || {}).phase, true);
 		return callStart('test-and-update').then(function(res) {
 			if (res && res.error_code) {
+				view._startPending = false;
+				setButtonState(btnStartUpdate, btnStartOnly, btnStop, (view._lastStatus || {}).phase, false);
 				notifyError(res);
 				return;
 			}
 			if (res && res.accepted === false) {
+				view._startPending = false;
+				setButtonState(btnStartUpdate, btnStartOnly, btnStop, (view._lastStatus || {}).phase, false);
 				notifyError(res);
 				return;
 			}
 			notifyOk(_('已接受：测速并更新 DNS（test-and-update）'));
 			return view.refreshAll();
 		}).catch(function(err) {
+			view._startPending = false;
+			setButtonState(btnStartUpdate, btnStartOnly, btnStop, (view._lastStatus || {}).phase, false);
 			notifyError({ error_message: String(err) });
 		});
 	});
 
 	btnStartOnly.addEventListener('click', function() {
-		btnStartUpdate.disabled = true;
-		btnStartOnly.disabled = true;
+		view._startPending = true;
+		view._startObserved = false;
+		setButtonState(btnStartUpdate, btnStartOnly, btnStop, (view._lastStatus || {}).phase, true);
 		return callStart('test-only').then(function(res) {
 			if (res && res.error_code) {
+				view._startPending = false;
+				setButtonState(btnStartUpdate, btnStartOnly, btnStop, (view._lastStatus || {}).phase, false);
 				notifyError(res);
 				return;
 			}
 			if (res && res.accepted === false) {
+				view._startPending = false;
+				setButtonState(btnStartUpdate, btnStartOnly, btnStop, (view._lastStatus || {}).phase, false);
 				notifyError(res);
 				return;
 			}
 			notifyOk(_('已接受：仅测速（test-only）'));
 			return view.refreshAll();
 		}).catch(function(err) {
+			view._startPending = false;
+			setButtonState(btnStartUpdate, btnStartOnly, btnStop, (view._lastStatus || {}).phase, false);
 			notifyError({ error_message: String(err) });
 		});
 	});
 
 	btnStop.addEventListener('click', function() {
+		btnStop.disabled = true;
 		return callStop().then(function(res) {
 			if (res && res.error_code) {
 				notifyError(res);
@@ -417,12 +523,14 @@ function buildConfigMap(view, summary) {
 	s.anonymous = false;
 
 	s.tab('basic', _('基本设置'));
-	s.tab('cloudflare', _('Cloudflare DNS'));
+	s.tab('cloudflare', _('Cloudflare DNS（Token / Zone）'));
 	s.tab('speedtest', _('测速参数'));
 	s.tab('naming', _('地区命名'));
 	s.tab('logs', _('运行日志'));
 
 	var o;
+	var tokenOption = null;
+	var clearOption = null;
 
 	o = s.taboption('basic', form.Flag, 'enabled', _('启用定时任务'));
 	o.rmempty = false;
@@ -445,38 +553,56 @@ function buildConfigMap(view, summary) {
 	o.value('error', 'error');
 	o.default = 'info';
 
-	/* Cloudflare section fields target ucisection cloudflare */
-	o = s.taboption('cloudflare', form.PasswordValue, '_api_token', _('API Token'));
+	/* Token and Zone are placed on the default tab so they are immediately visible. */
+	tokenOption = s.taboption('basic', form.Value, '_api_token', _('API Token'));
+	o = tokenOption;
 	o.password = true;
-	o.optional = true;
-	o.rmempty = true;
-	o.placeholder = _('已配置；留空保持不变');
-	o.ucisection = 'cloudflare';
-	o.cfgvalue = function() {
-		/* Never load secret via ordinary UCI; only show empty + placeholder when token_configured */
+	tokenOption.optional = true;
+	tokenOption.rmempty = true;
+	tokenOption.placeholder = _('已配置；留空保持不变');
+	tokenOption.ucisection = 'cloudflare';
+	tokenOption.cfgvalue = function() {
+		/* Never load the secret through ordinary UCI; an empty input means unchanged. */
 		return '';
 	};
-	o.write = function() {
-		/* Token saved exclusively through set_token RPC */
-		return true;
+	tokenOption.write = function(section_id, value) {
+		/* Save the secret through the dedicated RPC during LuCI's normal form parse. */
+		if (clearOption && clearOption.formvalue(section_id) === '1')
+			return callSetToken('', true).then(function(res) {
+				if (res && res.error_code)
+					return Promise.reject(new Error(res.error_message || res.error_code));
+				notifyOk(_('Token \u5df2\u6e05\u9664'));
+			});
+
+		return callSetToken(value, false).then(function(res) {
+			if (res && res.error_code)
+				return Promise.reject(new Error(res.error_message || res.error_code));
+			notifyOk(_('Token \u5df2\u901a\u8fc7 set_token \u66f4\u65b0'));
+		});
 	};
-	o.remove = function() {
+	tokenOption.remove = function() {
+		/* Do not remove the real UCI option when the masked input is empty. */
 		return true;
 	};
 	if (summary && summary.token_configured)
-		o.description = _('当前 Token 状态：已配置。留空保持不变；输入新值将通过 set_token 更新。');
+		tokenOption.description = _('\u5f53\u524d Token \u72b6\u6001\uff1a\u5df2\u914d\u7f6e\u3002\u7559\u7a7a\u4fdd\u6301\u4e0d\u53d8\uff1b\u8f93\u5165\u65b0\u503c\u5c06\u901a\u8fc7 set_token \u66f4\u65b0\u3002');
 	else
-		o.description = _('当前 Token 状态：未配置。输入后通过 set_token 安全写入。');
+		tokenOption.description = _('\u5f53\u524d Token \u72b6\u6001\uff1a\u672a\u914d\u7f6e\u3002\u8f93\u5165\u540e\u901a\u8fc7 set_token \u5b89\u5168\u5199\u5165\u3002');
 
-	o = s.taboption('cloudflare', form.Flag, '_clear_token', _('清除 Token'));
-	o.ucisection = 'cloudflare';
-	o.default = '0';
-	o.cfgvalue = function() { return '0'; };
-	o.write = function() { return true; };
-	o.remove = function() { return true; };
-	o.description = _('勾选后保存将通过 set_token(clear) 清除 Token');
+	clearOption = s.taboption('basic', form.Flag, '_clear_token', _('\u6e05\u9664 Token'));
+	clearOption.ucisection = 'cloudflare';
+	clearOption.default = '0';
+	clearOption.cfgvalue = function() { return '0'; };
+	clearOption.write = function() {
+		/* tokenOption performs the clear operation when this flag is set.
+		 * This option must otherwise be a no-op: saving interval/zone/etc.
+		 * must never erase an already configured token. */
+		return true;
+	};
+	clearOption.remove = function() { return true; };
+	clearOption.description = _('\u52fe\u9009\u540e\u4fdd\u5b58\u5c06\u901a\u8fc7 set_token(clear) \u6e05\u9664 Token');
 
-	o = s.taboption('cloudflare', form.Value, 'zone', _('Zone 域名'));
+	o = s.taboption('basic', form.Value, 'zone', _('Zone 域名'));
 	o.ucisection = 'cloudflare';
 	o.rmempty = false;
 	o.placeholder = 'example.com';
@@ -487,11 +613,13 @@ function buildConfigMap(view, summary) {
 	o.default = '1';
 	o.description = _('1 表示自动；否则 60–86400 秒');
 
-	o = s.taboption('cloudflare', form.DummyValue, '_proxy_note', _('代理模式'));
+	o = s.taboption('cloudflare', form.ListValue, 'proxied', _('代理模式'));
 	o.ucisection = 'cloudflare';
-	o.cfgvalue = function() {
-		return _('固定灰云（仅 DNS）。橙云代理已禁用：橙云会终止在 Cloudflare 边缘，无法把优选 IP 解析给客户端。');
-	};
+	o.value('0', _('灰云（仅 DNS）'));
+	o.value('1', _('橙云（启用 Cloudflare 代理）'));
+	o.default = '0';
+	o.rmempty = false;
+	o.description = _('灰云直接返回优选 IP；橙云由 Cloudflare 代理流量，可能改变测速 IP 的实际效果。');
 
 	/* speed test → test section */
 	o = s.taboption('speedtest', form.Value, 'threads', _('测速线程'));
@@ -548,111 +676,114 @@ function buildConfigMap(view, summary) {
 	o.ucisection = 'test';
 	o.default = '/usr/share/cloudflare-speedtest/ip.txt';
 
-	/* naming */
-	o = s.taboption('naming', form.Value, 'template', _('命名模板'));
-	o.ucisection = 'naming';
-	o.default = '{city}{isp}.{zone}';
+	o = s.taboption('speedtest', form.ListValue, 'ip_source', _('IP 来源'));
+	o.ucisection = 'test';
+	o.value('cidr', _('Cloudflare IP 段 / 裸 IP 列表'));
+	o.value('preferred', _('优选反代'));
+	o.default = 'cidr';
+	o.rmempty = false;
+	o.description = _('使用 cidr 时从 ip_file 读取 Cloudflare CIDR 段并展开为 IPv4 地址；使用优选反代时从反代网址读取 IP。');
 
-	o = s.taboption('naming', form.Flag, 'auto_detect', _('自动识别城市/运营商'));
+	o = s.taboption('speedtest', form.Value, 'candidate_count', _('随机候选 IP 数量'));
+	o.ucisection = 'test';
+	o.datatype = 'and(uinteger,min(0),max(1000000))';
+	o.default = '0';
+	o.description = _('0 表示不限制候选数量；若没有符合延迟/丢包条件的 IP，将按 1.5 倍自动扩展候选范围。');
+
+	o = s.taboption('speedtest', form.Flag, 'test_all', _('测试全部 IP'));
+	o.ucisection = 'test';
+	o.default = '0';
+	o.description = _('忽略随机候选数量，测试来源中的全部 IP。');
+
+	o = s.taboption('speedtest', form.ListValue, 'provider', _('优选反代提供商'));
+	o.ucisection = 'preferred';
+	o.value('auto', _('自动根据本地运营商选择'));
+	o.value('ct', _('电信'));
+	o.value('cu', _('联通'));
+	o.value('cmcc', _('移动'));
+	o.value('custom', _('自定义'));
+	o.default = 'auto';
+	o.rmempty = false;
+	o.description = _('选择仅测试指定的优选反代网址中的 IP。');
+
+	o = s.taboption('speedtest', form.Value, 'url_ct', _('电信优选 URL'));
+	o.ucisection = 'preferred';
+	o.default = ['https', '://cf.090227.xyz/ct?ips=20'].join('');
+	o.rmempty = false;
+
+	o = s.taboption('speedtest', form.Value, 'url_cu', _('联通优选 URL'));
+	o.ucisection = 'preferred';
+	o.default = ['https', '://cf.090227.xyz/cu?ips=20'].join('');
+	o.rmempty = false;
+
+	o = s.taboption('speedtest', form.Value, 'url_cmcc', _('移动优选 URL'));
+	o.ucisection = 'preferred';
+	o.default = ['https', '://cf.090227.xyz/cmcc?ips=20'].join('');
+	o.rmempty = false;
+
+	o = s.taboption('speedtest', form.Value, 'url_custom', _('自定义优选 URL'));
+	o.ucisection = 'preferred';
+	o.placeholder = _('填写返回 IPv4 地址列表的 URL');
+	o.description = _('URL 应返回 IPv4 地址，每行一个 IP；也支持文本中包含 IP 的格式。');
+
+	o = s.taboption('speedtest', form.Value, 'timeout', _('优选 URL 超时（秒）'));
+	o.ucisection = 'preferred';
+	o.datatype = 'and(uinteger,min(1),max(60))';
+	o.default = '15';
+
+
+	/* naming */
+	o = s.taboption('naming', form.Value, 'template', _('自定义子域名'));
+	o.ucisection = 'naming';
+	o.rmempty = false;
+	o.default = 'cf';
+	o.placeholder = 'cf or edge.node';
+	o.description = _('填写相对于 Zone 的自定义子域名，不要填写完整域名；最终会自动拼接为“子域名.Zone”。仅支持小写 ASCII 字母、数字、连字符和点。');
+
+	o = s.taboption('naming', form.DummyValue, '_naming_help', _('\u4f7f\u7528\u8bf4\u660e'));
+	o.cfgvalue = function() { return ''; };
+	o.render = function() {
+		return E('div', { 'class': 'cbi-value-description' },
+			_('\u5f53\u524d\u4f7f\u7528\u81ea\u5b9a\u4e49\u5b50\u57df\u540d\u3002\u82e5\u9700\u8981\u81ea\u52a8\u8bc6\u522b\u57ce\u5e02\u548c\u8fd0\u8425\u5546\u6765\u8bbe\u7f6e\u5b50\u57df\u540d\uff0c\u8bf7\u52fe\u9009\u201c\u81ea\u52a8\u8bc6\u522b\u57ce\u5e02\u002f\u8fd0\u8425\u5546\u201d\u3002\u57ce\u5e02\u8986\u76d6\u548c\u8fd0\u8425\u5546\u8986\u76d6\u4f18\u5148\u4e8e\u81ea\u52a8\u8bc6\u522b\uff1b\u56de\u9000\u4ee3\u7801\u4ec5\u5728\u81ea\u52a8\u8bc6\u522b\u4e0d\u53ef\u7528\u65f6\u4f5c\u4e3a\u6700\u540e\u7684\u547d\u540d\u515c\u5e95\u3002'));
+	};
+	o.write = function() {};
+	o.remove = function() { return true; };
+
+	o = s.taboption('naming', form.Flag, 'auto_detect', _('\u81ea\u52a8\u8bc6\u522b\u57ce\u5e02/\u8fd0\u8425\u5546'));
 	o.ucisection = 'naming';
 	o.default = '1';
+	o.description = _('\u52fe\u9009\u540e\uff0c\u4ec5\u4f7f\u7528 UAPIS myip \u67e5\u8be2\u672c\u5730\u516c\u7f51 IP \u7684\u57ce\u5e02\u548c\u8fd0\u8425\u5546\uff0c\u5e76\u4ec5\u5728\u6a21\u677f\u5305\u542b {city} \u6216 {isp} \u65f6\u7528\u4e8e\u751f\u6210\u4e3b\u673a\u540d\u3002');
 
-	o = s.taboption('naming', form.Value, 'city_override', _('城市覆盖'));
+	o = s.taboption('naming', form.Value, 'city_override', _('\u57ce\u5e02\u8986\u76d6'));
 	o.ucisection = 'naming';
 	o.optional = true;
+	o.placeholder = _('\u4f8b\u5982 sz \u6216 bj');
+	o.description = _('\u624b\u52a8\u6307\u5b9a\u57ce\u5e02\u4ee3\u7801\uff0c\u4f18\u5148\u4e8e\u81ea\u52a8\u8bc6\u522b\u3002\u4ec5\u5f53\u6a21\u677f\u5305\u542b {city} \u65f6\u5f71\u54cd DNS \u4e3b\u673a\u540d\uff0c\u4e0d\u6539\u53d8\u201c\u5730\u533a\u4e0e DNS\u201d \u4e2d\u663e\u793a\u7684\u672c\u5730\u5f52\u5c5e\u3002');
 
-	o = s.taboption('naming', form.Value, 'isp_override', _('运营商覆盖'));
+	o = s.taboption('naming', form.Value, 'isp_override', _('\u8fd0\u8425\u5546\u8986\u76d6'));
 	o.ucisection = 'naming';
 	o.optional = true;
+	o.placeholder = _('\u4f8b\u5982 ct\u3001cu \u6216 cm');
+	o.description = _('\u624b\u52a8\u6307\u5b9a\u8fd0\u8425\u5546\u4ee3\u7801\uff0c\u4f18\u5148\u4e8e\u81ea\u52a8\u8bc6\u522b\u3002\u4ec5\u5f53\u6a21\u677f\u5305\u542b {isp} \u65f6\u5f71\u54cd DNS \u4e3b\u673a\u540d\uff0c\u4e0d\u6539\u53d8\u201c\u5730\u533a\u4e0e DNS\u201d \u4e2d\u663e\u793a\u7684\u672c\u5730\u5f52\u5c5e\u3002');
 
-	o = s.taboption('naming', form.Value, 'fallback_city', _('回退城市代码'));
+	o = s.taboption('naming', form.Value, 'fallback_city', _('\u56de\u9000\u57ce\u5e02\u4ee3\u7801'));
 	o.ucisection = 'naming';
 	o.optional = true;
+	o.placeholder = _('\u4f8b\u5982 sz \u6216 bj');
+	o.description = _('\u4ec5\u5728\u6ca1\u6709\u57ce\u5e02\u8986\u76d6\u3001\u81ea\u52a8\u8bc6\u522b\u4e0d\u53ef\u7528\u4e14\u6a21\u677f\u9700\u8981 {city} \u65f6\u4f7f\u7528\uff0c\u4f5c\u4e3a\u57ce\u5e02\u547d\u540d\u7684\u6700\u540e\u515c\u5e95\uff1b\u4e0d\u7528\u4e8e\u663e\u793a\u672c\u5730\u5f52\u5c5e\u3002');
 
-	o = s.taboption('naming', form.Value, 'fallback_isp', _('回退运营商代码'));
+	o = s.taboption('naming', form.Value, 'fallback_isp', _('\u56de\u9000\u8fd0\u8425\u5546\u4ee3\u7801'));
 	o.ucisection = 'naming';
 	o.optional = true;
+	o.placeholder = _('\u4f8b\u5982 ct\u3001cu \u6216 cm');
+	o.description = _('\u4ec5\u5728\u6ca1\u6709\u8fd0\u8425\u5546\u8986\u76d6\u3001\u81ea\u52a8\u8bc6\u522b\u4e0d\u53ef\u7528\u4e14\u6a21\u677f\u9700\u8981 {isp} \u65f6\u4f7f\u7528\uff0c\u4f5c\u4e3a\u8fd0\u8425\u5546\u547d\u540d\u7684\u6700\u540e\u515c\u5e95\uff1b\u4e0d\u7528\u4e8e\u663e\u793a\u672c\u5730\u5f52\u5c5e\u3002');
 
-	/* logs tab: pointer to live panel (rendered outside map for polling) */
-	o = s.taboption('logs', form.DummyValue, '_logs_help', _('说明'));
-	o.cfgvalue = function() {
-		return _('日志面板位于页面底部，支持手动/自动刷新与 clear_logs。');
-	};
-
-	var tokenOption = null;
-	var clearOption = null;
-	m.findElement = m.findElement; /* keep reference */
-
-	var origSave = m.save;
-	m.save = function() {
-		var self = this;
-		var tokenInput = self.map ? null : null;
-		var tokenVal = '';
-		var clearVal = false;
-
-		var nodes = self.renderContents ? null : null;
-		void nodes;
-		void tokenInput;
-
-		/* Read widget values from DOM after form serialize path */
-		var tokenEl = document.querySelector('[id$="._api_token"]') ||
-			document.querySelector('input[data-name="_api_token"]') ||
-			document.getElementById(self.prepend ? '' : '');
-		/* Fallback: scan password inputs in this map */
-		if (!tokenEl) {
-			var passwords = document.querySelectorAll('input[type="password"]');
-			if (passwords && passwords.length)
-				tokenEl = passwords[0];
-		}
-		if (tokenEl)
-			tokenVal = tokenEl.value || '';
-
-		var clearEl = document.querySelector('input[type="checkbox"][data-name="_clear_token"], input[name$="._clear_token"]');
-		if (!clearEl) {
-			/* best-effort: look for clear flag near token */
-			var flags = document.querySelectorAll('input[type="checkbox"]');
-			for (var i = 0; i < flags.length; i++) {
-				var id = flags[i].id || flags[i].name || '';
-				if (id.indexOf('_clear_token') !== -1) {
-					clearEl = flags[i];
-					break;
-				}
-			}
-		}
-		if (clearEl)
-			clearVal = !!(clearEl.checked || clearEl.value === '1');
-
-		var tokenPromise = Promise.resolve();
-		if (clearVal) {
-			tokenPromise = callSetToken('', true).then(function(res) {
-				if (res && res.error_code)
-					notifyError(res);
-				else
-					notifyOk(_('Token 已清除'));
-			});
-		}
-		else if (tokenVal) {
-			tokenPromise = callSetToken(tokenVal, false).then(function(res) {
-				if (res && res.error_code)
-					notifyError(res);
-				else
-					notifyOk(_('Token 已通过 set_token 更新'));
-			});
-		}
-
-		return tokenPromise.then(function() {
-			if (typeof origSave === 'function')
-				return origSave.apply(self, arguments);
-			return form.Map.prototype.save.apply(self, arguments);
-		}).then(function(res) {
-			if (tokenEl)
-				tokenEl.value = '';
-			return view.refreshAll().then(function() { return res; });
-		});
-	};
-
-	void tokenOption;
-	void clearOption;
+	/* Keep the only live log panel inside the logs tab. */
+	o = s.taboption('logs', form.Value, '_logs_panel', _('运行日志'));
+	o.cfgvalue = function() { return ''; };
+	o.render = function() { return renderLogsPanel(view); };
+	o.write = function() {};
+	o.remove = function() { return true; };
 
 	return m;
 }
@@ -680,13 +811,23 @@ return view.extend({
 			view._lastStatus = status;
 			view._lastResult = result;
 			view._lastSummary = summary;
+			/* Keep Stop enabled while an accepted task is still transitioning from
+			 * the old terminal status to preparing/active. */
+			if (isActivePhase(status.phase)) {
+				view._startPending = false;
+				view._startObserved = true;
+			}
+			else if (view._startObserved && /^(success|failed|cancelled|partial_success)$/.test(status.phase || '')) {
+				view._startPending = false;
+				view._startObserved = false;
+			}
 			updateCardDom(status, result, summary);
 			if (view._btnStartUpdate)
-				setButtonState(view._btnStartUpdate, view._btnStartOnly, view._btnStop, status.phase);
+				setButtonState(view._btnStartUpdate, view._btnStartOnly, view._btnStop, status.phase, view._startPending);
 			if (view._logsAuto && view._logsAuto.checked && view._loadLogs)
 				return view._loadLogs();
 		}).catch(function(err) {
-			ui.addNotification(null, E('p', {}, String(err)), 'danger');
+			addDismissibleNotification(null, E('p', {}, String(err)), 'danger');
 		});
 	},
 
@@ -703,52 +844,61 @@ return view.extend({
 
 		var cards = renderStatusCards(status, result, summary);
 		var actions = renderActions(view);
-		setButtonState(view._btnStartUpdate, view._btnStartOnly, view._btnStop, status.phase);
+		setButtonState(view._btnStartUpdate, view._btnStartOnly, view._btnStop, status.phase, view._startPending);
 
 		var map = buildConfigMap(view, summary);
-		var logs = renderLogsPanel(view);
+		/* form.Map.render() is asynchronous on LuCI 24.10. Resolve it before
+		 * inserting the result into the DOM; otherwise the page displays
+		 * literal "[object Promise]" and none of the tabs/fields are visible. */
+		return Promise.resolve(map.render()).then(function(mapNode) {
+			var root = E('div', { 'class': 'cfst-overview', 'id': 'cfst-overview' }, [
+				E('h2', {}, _('Cloudflare 优选 IP')),
+				E('p', {}, _('单页仪表盘：状态、手动操作、配置与日志。页面关闭不影响后台任务。')),
+				cards,
+				actions,
+				E('div', { 'class': 'cbi-section-node' }, [ mapNode ]),
+			]);
 
-		var root = E('div', { 'class': 'cbi-map', 'id': 'cfst-overview' }, [
-			E('h2', {}, _('Cloudflare 优选 IP')),
-			E('p', {}, _('单页仪表盘：状态、手动操作、配置与日志。页面关闭不影响后台任务。')),
-			cards,
-			actions,
-			E('div', { 'class': 'cbi-section-node' }, [ map.render() ]),
-			logs
-		]);
+			view._loadLogs();
 
-		view._loadLogs();
+			var pollFn = L.bind(function() {
+				return view.refreshAll().then(function() {
+					var active = isActivePhase((view._lastStatus || {}).phase);
+					if (active !== view._pollActive) {
+						view._pollActive = active;
+						/* interval switch: 3000ms active / 15000ms idle — restart poll body next tick */
+					}
+				});
+			}, view);
 
-		var pollFn = L.bind(function() {
-			return view.refreshAll().then(function() {
-				var active = isActivePhase((view._lastStatus || {}).phase);
-				if (active !== view._pollActive) {
-					view._pollActive = active;
-					/* interval switch: 3000ms active / 15000ms idle — restart poll body next tick */
-				}
-			});
-		}, view);
+			/* Initial poll cadence: active 3000ms → 3s, idle 15000ms → 15s */
+			var intervalSec = view._pollActive ? (POLL_ACTIVE_MS / 1000) : (POLL_IDLE_MS / 1000);
+			poll.add(pollFn, intervalSec);
 
-		/* Initial poll cadence: active 3000ms → 3s, idle 15000ms → 15s */
-		var intervalSec = view._pollActive ? (POLL_ACTIVE_MS / 1000) : (POLL_IDLE_MS / 1000);
-		poll.add(pollFn, intervalSec);
+			/* Dual-cadence helper: when phase flips, schedule complementary delay markers */
+			view._pollTimer = null;
+			var armCadence = function() {
+				if (view._pollTimer)
+					window.clearTimeout(view._pollTimer);
+				var ms = isActivePhase((view._lastStatus || {}).phase) ? POLL_ACTIVE_MS : POLL_IDLE_MS;
+				view._pollTimer = window.setTimeout(function() {
+					view.refreshAll().finally(armCadence);
+				}, ms);
+			};
+			armCadence();
 
-		/* Dual-cadence helper: when phase flips, schedule complementary delay markers */
-		view._pollTimer = null;
-		var armCadence = function() {
-			if (view._pollTimer)
-				window.clearTimeout(view._pollTimer);
-			var ms = isActivePhase((view._lastStatus || {}).phase) ? POLL_ACTIVE_MS : POLL_IDLE_MS;
-			view._pollTimer = window.setTimeout(function() {
-				view.refreshAll().finally(armCadence);
-			}, ms);
-		};
-		armCadence();
-
-		return root;
+			return root;
+		});
 	},
 
-	handleSaveApply: null,
-	handleSave: null,
-	handleReset: null
+	/* LuCI renders Save / Save & Apply in the standard page footer when these handlers exist. */
+	handleSaveApply: function(ev, mode) {
+		return this.super('handleSaveApply', arguments);
+	},
+	handleSave: function(ev) {
+		return this.super('handleSave', arguments);
+	},
+	handleReset: function(ev) {
+		return this.super('handleReset', arguments);
+	}
 });

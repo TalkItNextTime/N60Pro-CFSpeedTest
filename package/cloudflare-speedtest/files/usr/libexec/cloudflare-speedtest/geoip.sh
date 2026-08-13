@@ -3,9 +3,11 @@
 # GeoIP provider adapters and public IPv4 validation (BusyBox ash).
 
 : "${CFST_GEO_TIMEOUT:=8}"
-: "${CFST_GEO_CACHE_TTL_HOURS:=72}"
-# Prefer ipwho.is first: ipapi.co is frequently blocked by Cloudflare challenge pages.
-: "${CFST_GEO_PROVIDERS:=ipwho.is ipapi.co}"
+: "${CFST_NETWORK_CACHE_TTL_DAYS:=7}"
+: "${CFST_IPINFO_CACHE_TTL_DAYS:=30}"
+: "${CFST_IPINFO_CLEANUP_HOURS:=6}"
+: "${CFST_IPINFO_CACHE_DIR:=/etc/cloudflare-speedtest/ipinfo-cache}"
+: "${CFST_IPINFO_CLEANUP_STAMP_FILE:=$CFST_IPINFO_CACHE_DIR/.last_cleanup}"
 : "${CFST_TASK_DIR:=/tmp/cloudflare-speedtest}"
 
 set_geo_error() {
@@ -65,63 +67,28 @@ _json_get() {
     jsonfilter -i "$file" -e "$expr" 2>/dev/null || true
 }
 
-# Normalize ipapi.co (and ipapi.com-compatible) JSON body to identity JSON.
-# Contract: fields ip, city, org (ISP). Source label is always ipapi.co.
-parse_ipapi() {
+# UAPIS returns a region string such as "China Guangdong Shenzhen". Keep the complete
+# region for display and use the final token for the city-code mapping.
+parse_uapi_network() {
     file="$1"
     [ -f "$file" ] || return 1
-
     ip="$(_json_get "$file" '@.ip')"
-    city="$(_json_get "$file" '@.city')"
-    isp="$(_json_get "$file" '@.org')"
-    # Some ipapi responses use "error":true
-    err="$(_json_get "$file" '@.error')"
-    if [ "$err" = "true" ] || [ -z "$ip" ] || [ -z "$city" ] || [ -z "$isp" ]; then
-        return 1
-    fi
-
-    escaped_ip="$(json_escape "$ip")"
-    escaped_city="$(json_escape "$city")"
-    escaped_isp="$(json_escape "$isp")"
-    printf '{"ip":"%s","city":"%s","isp":"%s","source":"ipapi.co"}\n' \
-        "$escaped_ip" "$escaped_city" "$escaped_isp"
+    region="$(_json_get "$file" '@.region')"
+    isp="$(_json_get "$file" '@.isp')"
+    asn="$(_json_get "$file" '@.asn')"
+    llc="$(_json_get "$file" '@.llc')"
+    [ -n "$ip" ] && [ -n "$region" ] && [ -n "$isp" ] || return 1
+    city="$(printf '%s\n' "$region" | awk '{print $NF}')"
+    [ -n "$city" ] || return 1
+    printf '{"ip":"%s","region":"%s","city":"%s","isp":"%s","asn":"%s","llc":"%s","source":"uapis.cn"}\n' \
+        "$(json_escape "$ip")" "$(json_escape "$region")" "$(json_escape "$city")" \
+        "$(json_escape "$isp")" "$(json_escape "$asn")" "$(json_escape "$llc")"
 }
 
-# Normalize ipwho.is JSON body.
-# Prefer connection.org over connection.isp: some responses put a street
-# address in isp and the real carrier name in org (e.g. CHINANET ...).
-parse_ipwhois() {
+parse_uapi_ipinfo() {
     file="$1"
-    [ -f "$file" ] || return 1
-
-    success="$(_json_get "$file" '@.success')"
-    ip="$(_json_get "$file" '@.ip')"
-    city="$(_json_get "$file" '@.city')"
-    org="$(_json_get "$file" '@.connection.org')"
-    isp_field="$(_json_get "$file" '@.connection.isp')"
-    # Prefer org when isp is empty or looks like a postal/street address.
-    case "$isp_field" in
-        ''|*,*|No.*|*[Nn]o\.[0-9]*|*[Ss]treet*|*[Rr]oad*|*[Aa]venue*)
-            if [ -n "$org" ]; then
-                isp="$org"
-            else
-                isp="$isp_field"
-            fi
-            ;;
-        *)
-            isp="$isp_field"
-            [ -n "$isp" ] || isp="$org"
-            ;;
-    esac
-    if [ "$success" = "false" ] || [ -z "$ip" ] || [ -z "$city" ] || [ -z "$isp" ]; then
-        return 1
-    fi
-
-    escaped_ip="$(json_escape "$ip")"
-    escaped_city="$(json_escape "$city")"
-    escaped_isp="$(json_escape "$isp")"
-    printf '{"ip":"%s","city":"%s","isp":"%s","source":"ipwho.is"}\n' \
-        "$escaped_ip" "$escaped_city" "$escaped_isp"
+    parsed="$(parse_uapi_network "$file" 2>/dev/null)" || return 1
+    printf '%s\n' "$parsed" | sed 's/"source":"uapis.cn"/"source":"uapis.cn\/ipinfo"/'
 }
 
 # Fetch a provider URL into outfile using curl with proxy bypass.
@@ -145,38 +112,17 @@ _geo_curl() {
     )
 }
 
-query_geo_provider() {
-    provider="$1"
-    body_file="${CFST_TASK_DIR:-/tmp}/geo-body.$$"
+query_myip() {
+    body_file="${CFST_TASK_DIR:-/tmp}/myip-body.$$"
     mkdir -p "${CFST_TASK_DIR:-/tmp}" 2>/dev/null || true
-
-    case "$provider" in
-        ipapi.co|ipapi)
-            url='https://ipapi.co/json/'
-            if ! _geo_curl "$url" "$body_file"; then
-                rm -f "$body_file"
-                return 1
-            fi
-            parse_ipapi "$body_file"
-            status=$?
-            rm -f "$body_file"
-            return "$status"
-            ;;
-        ipwho.is|ipwhois|ipwhois.io)
-            url='https://ipwho.is/'
-            if ! _geo_curl "$url" "$body_file"; then
-                rm -f "$body_file"
-                return 1
-            fi
-            parse_ipwhois "$body_file"
-            status=$?
-            rm -f "$body_file"
-            return "$status"
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+    if ! _geo_curl 'https://uapis.cn/api/v1/network/myip' "$body_file"; then
+        rm -f "$body_file"
+        return 1
+    fi
+    parse_uapi_network "$body_file"
+    status=$?
+    rm -f "$body_file"
+    return "$status"
 }
 
 _geo_field() {
@@ -185,24 +131,104 @@ _geo_field() {
     jsonfilter -s "$json" -e "@.$field" 2>/dev/null || true
 }
 
-_cache_is_fresh() {
+_network_cache_is_fresh() {
     cache_json="$1"
-    [ -n "$cache_json" ] || return 1
-    cached_at="$(_geo_field "$cache_json" cached_at)"
-    case "$cached_at" in
-        ''|*[!0-9]*) return 1 ;;
-    esac
+    queried_at="$(_geo_field "$cache_json" queried_at)"
+    case "$queried_at" in ''|*[!0-9]*) return 1 ;; esac
     now="$(cfst_now 2>/dev/null || date +%s)"
-    case "$now" in
-        ''|*[!0-9]*) now="$(date +%s)" ;;
-    esac
-    ttl_hours="${CFST_GEO_CACHE_TTL_HOURS:-72}"
-    case "$ttl_hours" in
-        ''|*[!0-9]*) ttl_hours=72 ;;
-    esac
-    ttl_seconds=$((ttl_hours * 3600))
-    age=$((now - cached_at))
-    [ "$age" -ge 0 ] && [ "$age" -le "$ttl_seconds" ]
+    ttl_days="${CFST_NETWORK_CACHE_TTL_DAYS:-7}"
+    case "$ttl_days" in ''|*[!0-9]*) ttl_days=7 ;; esac
+    age=$((now - queried_at))
+    [ "$age" -ge 0 ] && [ "$age" -le $((ttl_days * 86400)) ]
+}
+
+ipinfo_cache_file() {
+    ip="$1"
+    validate_public_ipv4 "$ip" || return 1
+    mkdir -p "$CFST_IPINFO_CACHE_DIR" 2>/dev/null || return 1
+    printf '%s/%s.json\n' "$CFST_IPINFO_CACHE_DIR" "$(printf '%s' "$ip" | tr . _)"
+}
+
+_ipinfo_cache_is_fresh() {
+    cache_json="$1"
+    queried_at="$(_geo_field "$cache_json" queried_at)"
+    case "$queried_at" in ''|*[!0-9]*) return 1 ;; esac
+    now="$(cfst_now 2>/dev/null || date +%s)"
+    ttl_days="${CFST_IPINFO_CACHE_TTL_DAYS:-30}"
+    case "$ttl_days" in ''|*[!0-9]*) ttl_days=30 ;; esac
+    age=$((now - queried_at))
+    [ "$age" -ge 0 ] && [ "$age" -le $((ttl_days * 86400)) ]
+}
+
+query_ipinfo() {
+    ip="$1"
+    validate_public_ipv4 "$ip" || return 1
+    body_file="${CFST_TASK_DIR:-/tmp}/ipinfo-body.$$"
+    if ! _geo_curl "https://uapis.cn/api/v1/network/ipinfo?ip=$ip" "$body_file"; then
+        rm -f "$body_file"
+        return 1
+    fi
+    parsed="$(parse_uapi_ipinfo "$body_file" 2>/dev/null)"
+    status=$?
+    rm -f "$body_file"
+    [ "$status" -eq 0 ] || return 1
+    now="$(cfst_now 2>/dev/null || date +%s)"
+    ip_value="$(_geo_field "$parsed" ip)"
+    region_value="$(_geo_field "$parsed" region)"
+    city_value="$(_geo_field "$parsed" city)"
+    isp_value="$(_geo_field "$parsed" isp)"
+    asn_value="$(_geo_field "$parsed" asn)"
+    llc_value="$(_geo_field "$parsed" llc)"
+    source_value="$(_geo_field "$parsed" source)"
+    printf '{"ip":"%s","region":"%s","city":"%s","isp":"%s","asn":"%s","llc":"%s","source":"%s","queried_at":%s}\n' \
+        "$(json_escape "$ip_value")" "$(json_escape "$region_value")" "$(json_escape "$city_value")" \
+        "$(json_escape "$isp_value")" "$(json_escape "$asn_value")" "$(json_escape "$llc_value")" \
+        "$(json_escape "$source_value")" "$now"
+}
+
+ipinfo_cleanup_if_due() {
+    now="$(cfst_now 2>/dev/null || date +%s)"
+    last="${CFST_IPINFO_LAST_CLEANUP:-}"
+    if [ -z "$last" ] && [ -f "$CFST_IPINFO_CLEANUP_STAMP_FILE" ]; then
+        last="$(cat "$CFST_IPINFO_CLEANUP_STAMP_FILE" 2>/dev/null || true)"
+    fi
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    hours="${CFST_IPINFO_CLEANUP_HOURS:-6}"
+    case "$hours" in ''|*[!0-9]*) hours=6 ;; esac
+    if [ $((now - last)) -lt $((hours * 3600)) ] && [ "$last" -le "$now" ]; then return 0; fi
+    if [ -d "$CFST_IPINFO_CACHE_DIR" ]; then
+        for file in "$CFST_IPINFO_CACHE_DIR"/*.json; do
+            [ -f "$file" ] || continue
+            cached="$(cat "$file" 2>/dev/null || true)"
+            _ipinfo_cache_is_fresh "$cached" || rm -f "$file"
+        done
+    fi
+    mkdir -p "${CFST_IPINFO_CLEANUP_STAMP_FILE%/*}" 2>/dev/null || true
+    printf '%s\n' "$now" > "$CFST_IPINFO_CLEANUP_STAMP_FILE" 2>/dev/null || true
+    CFST_IPINFO_LAST_CLEANUP="$now"
+    export CFST_IPINFO_LAST_CLEANUP
+}
+
+ipinfo_get_or_query() {
+    ip="$1"
+    file="$(ipinfo_cache_file "$ip" 2>/dev/null || true)"
+    [ -n "$file" ] || return 1
+    cached=""
+    [ -f "$file" ] && cached="$(cat "$file" 2>/dev/null || true)"
+    if _ipinfo_cache_is_fresh "$cached"; then printf '%s\n' "$cached"; return 0; fi
+    info="$(query_ipinfo "$ip" 2>/dev/null || true)"
+    [ -n "$info" ] || return 1
+    atomic_write "$file" <<EOF
+$info
+EOF
+    printf '%s\n' "$info"
+}
+
+
+_cache_is_fresh() {
+    # Backward-compatible name used by the resolver; network_cache uses the
+    # UAPIS myip query timestamp and a seven-day TTL.
+    _network_cache_is_fresh "$1"
 }
 
 _pick_source() {
@@ -250,19 +276,51 @@ resolve_network_identity() {
     auto_city=''
     auto_isp=''
     auto_source=''
+    raw_region=''
+    raw_asn=''
+    raw_llc=''
+    raw_queried_at=''
 
     if [ "${CFST_AUTO_DETECT:-1}" = "1" ]; then
-        for provider in $CFST_GEO_PROVIDERS; do
-            raw="$(query_geo_provider "$provider" 2>/dev/null)" || raw=''
-            [ -n "$raw" ] || continue
+        raw=''
+        # The public-IP lookup is deliberately low frequency. A persisted UAPI
+        # response is reused for seven days; this also avoids changing the
+        # hostname on every speed-test run.
+        if [ ! -f "${CFST_NETWORK_CACHE_INVALIDATION_FILE:-/tmp/cloudflare-speedtest/network-cache-invalidated}" ] && _network_cache_is_fresh "${CFST_NETWORK_CACHE:-}"; then
+            raw="${CFST_NETWORK_CACHE}"
+        else
+            raw="$(query_myip 2>/dev/null)" || raw=''
+            if [ -n "$raw" ]; then
+                # UAPIS myip has no cache timestamp. Attach the query time
+                # before persisting it so normal runs reuse this response for
+                # seven days and WAN hotplug can explicitly invalidate it.
+                now="$(cfst_now 2>/dev/null || date +%s)"
+                raw="$(printf '%s\n' "$raw" | sed "s/}$/,$(printf '"queried_at":%s' "$now")}/")"
+                CFST_NETWORK_CACHE="$raw"
+                export CFST_NETWORK_CACHE
+                rm -f "${CFST_NETWORK_CACHE_INVALIDATION_FILE:-/tmp/cloudflare-speedtest/network-cache-invalidated}" 2>/dev/null || true
+            fi
+        fi
+        if [ -n "$raw" ]; then
 
             raw_ip="$(_geo_field "$raw" ip)"
             raw_city="$(_geo_field "$raw" city)"
             raw_isp="$(_geo_field "$raw" isp)"
             raw_source="$(_geo_field "$raw" source)"
+            raw_region="$(_geo_field "$raw" region)"
+            raw_asn="$(_geo_field "$raw" asn)"
+            raw_llc="$(_geo_field "$raw" llc)"
+            raw_queried_at="$(_geo_field "$raw" queried_at)"
+            case "$raw_queried_at" in
+                ''|*[!0-9]*) raw_queried_at=0 ;;
+            esac
 
             if ! validate_public_ipv4 "$raw_ip"; then
-                continue
+                raw=''
+            fi
+            if [ -z "$raw" ]; then
+                set_geo_error GEO_ALL_PROVIDERS_FAILED 'invalid public IP response' 41
+                return $?
             fi
 
             mapped_city="$(map_city "$raw_city" 2>/dev/null || true)"
@@ -272,17 +330,26 @@ resolve_network_identity() {
             auto_city="$mapped_city"
             auto_isp="$mapped_isp"
             auto_source="$raw_source"
-            break
-        done
+        fi
     fi
 
-    cache_json="${CFST_GEO_CACHE:-}"
+    # The only remote local-network source is UAPIS myip. Reuse its
+    # persisted seven-day cache; do not fall back to another IP provider or
+    # to the legacy preferred-node geo cache.
+    cache_json="${CFST_NETWORK_CACHE:-}"
     cached_city=''
     cached_isp=''
     cached_ip=''
     if _cache_is_fresh "$cache_json"; then
-        cached_city="$(_geo_field "$cache_json" city)"
-        cached_isp="$(_geo_field "$cache_json" isp)"
+        cached_city_raw="$(_geo_field "$cache_json" city)"
+        cached_isp_raw="$(_geo_field "$cache_json" isp)"
+        # Persisted state from older versions may contain Chinese names or
+        # provider names instead of normalized codes. Normalize both forms
+        # before using them in a {city}/{isp} hostname template.
+        cached_city="$(map_city "$cached_city_raw" 2>/dev/null || true)"
+        cached_isp="$(map_isp "$cached_isp_raw" 2>/dev/null || true)"
+        [ -n "$cached_city" ] || cached_city="$cached_city_raw"
+        [ -n "$cached_isp" ] || cached_isp="$cached_isp_raw"
         cached_ip="$(_geo_field "$cache_json" ip)"
     fi
 
@@ -311,7 +378,11 @@ resolve_network_identity() {
     escaped_city="$(json_escape "$city_code")"
     escaped_isp="$(json_escape "$isp_code")"
     escaped_source="$(json_escape "$source")"
+    escaped_region="$(json_escape "${raw_region:-}")"
+    escaped_asn="$(json_escape "${raw_asn:-}")"
+    escaped_llc="$(json_escape "${raw_llc:-}")"
+    case "$raw_queried_at" in ''|*[!0-9]*) raw_queried_at=0 ;; esac
 
-    printf '{"ip":"%s","city":"%s","isp":"%s","source":"%s"}\n' \
-        "$escaped_ip" "$escaped_city" "$escaped_isp" "$escaped_source"
+    printf '{"ip":"%s","city":"%s","isp":"%s","source":"%s","region":"%s","asn":"%s","llc":"%s","queried_at":%s}\n' \
+        "$escaped_ip" "$escaped_city" "$escaped_isp" "$escaped_source" "$escaped_region" "$escaped_asn" "$escaped_llc" "$raw_queried_at"
 }

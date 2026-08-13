@@ -1,0 +1,3 @@
+IP address,Sent,Received,Loss Rate,Average Latency,Download Speed (MB/s),Data Center
+104.18.7.7,4,4,0.00,250.0,50.0,AMS
+104.18.8.8,4,4,0.50,10.0,50.0,ORD

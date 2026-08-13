@@ -143,6 +143,32 @@ _normalize_number() {
     }'
 }
 
+# result_has_qualified_latency FILE MAX_LATENCY MAX_LOSS
+# Returns success when the CSV contains at least one candidate that passed the
+# latency/loss gate. This intentionally ignores download speed: it is used by
+# the adaptive preflight before the real download phase.
+result_has_qualified_latency() {
+    file="$1"
+    max_latency="$2"
+    max_loss="$3"
+    validate_cfst_header "$file" >/dev/null 2>&1 || return 1
+    awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" '
+        NR == 1 { next }
+        function is_num(v) { return v ~ /^[0-9]+([.][0-9]+)?$/ }
+        {
+            sub(/\r$/, "", $0)
+            if (NF != 7) next
+            if (!is_num($2) || !is_num($3) || !is_num($4) || !is_num($5)) next
+            if ($3 + 0 <= 0) next
+            if ($5 + 0 <= 0 || $5 + 0 > max_latency + 0) next
+            if ($4 + 0 < 0 || $4 + 0 > max_loss + 0) next
+            found = 1
+            exit
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$file"
+}
+
 # select_best_result FILE MAX_LATENCY MAX_LOSS MIN_SPEED
 # Prints one compact JSON object for the best qualified candidate.
 # Exit 50 RESULT_BAD_CSV or 51 RESULT_NO_QUALIFIED_IP on failure.

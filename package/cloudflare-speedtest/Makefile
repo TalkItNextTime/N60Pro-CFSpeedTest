@@ -45,7 +45,7 @@ endef
 
 define Package/cloudflare-speedtest/description
   OpenWrt plugin that runs a pinned CloudflareSpeedTest (cfst) binary,
-  selects a qualified edge IP, and publishes a gray-cloud A record via
+  selects a qualified edge IP, and publishes a Cloudflare A record via
   the Cloudflare API. Uses BusyBox crond (no separate cron package).
 endef
 

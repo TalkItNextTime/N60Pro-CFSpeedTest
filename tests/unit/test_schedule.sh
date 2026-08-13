@@ -13,6 +13,7 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 
 export CFST_CRONTAB_FILE="$TMP/root"
 export CFST_CRON_RELOAD_CMD="$TMP/reload.sh"
+export CFST_DEFERRED_SCHEDULE_FILE="$TMP/deferred-schedule"
 export CFST_HOTPLUG_STAMP_FILE="$TMP/hotplug.stamp"
 export CFST_HOTPLUG_DELAY=300
 export CFST_WAN_INTERFACE=wan
@@ -79,6 +80,31 @@ line_count="$(grep -c 'cloudflare-speedtest' "$CFST_CRONTAB_FILE" || true)"
 assert_eq "$line_count" "1"
 [ ! -s "$TMP/reload.log" ] || fail 'reload should not run when content unchanged'
 
+# --- successful manual publish re-anchors the next cron run by one interval ---
+assert_eq "$(schedule_date_field 1700000000 M)" "13"
+assert_eq "$(schedule_date_field 1700000000 H)" "06"
+CFST_ENABLED=1
+CFST_INTERVAL_HOURS=6
+CFST_NOW=1700000000
+export CFST_ENABLED CFST_INTERVAL_HOURS CFST_NOW
+printf '0 * * * * /bin/true\n' > "$CFST_CRONTAB_FILE"
+schedule_defer_after_manual_success
+expected_next=$(((CFST_NOW + 6 * 3600 + 59) / 60 * 60))
+assert_eq "$CFST_SCHEDULE_NEXT_RUN_AT" "$expected_next"
+expected_minute="$(schedule_date_field "$expected_next" M)"
+expected_hour="$(schedule_date_field "$expected_next" H)"
+expected_hours="$(schedule_hour_list 6 "$(printf '%s\n' "$expected_hour" | awk '{ print $1 + 0 }')")"
+content="$(cat "$CFST_CRONTAB_FILE")"
+assert_contains "$content" '0 * * * * /bin/true'
+assert_contains "$content" "$(printf '%s\n' "$expected_minute" | awk '{ print $1 + 0 }') $expected_hours * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
+assert_contains "$content" 'cloudflare-speedtest'
+assert_file_exists "$CFST_DEFERRED_SCHEDULE_FILE"
+
+# A later LuCI/procd schedule apply must retain this manual-success anchor.
+write_cron
+content="$(cat "$CFST_CRONTAB_FILE")"
+assert_contains "$content" "$(printf '%s\n' "$expected_minute" | awk '{ print $1 + 0 }') $expected_hours * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
+
 # --- disabled removes only marked cron line ---
 CFST_ENABLED=0
 export CFST_ENABLED
@@ -89,6 +115,7 @@ assert_contains "$content" '0 * * * * /bin/true'
 case "$content" in
     *cloudflare-speedtest*) fail 'marked cron line should be removed' ;;
 esac
+[ ! -e "$CFST_DEFERRED_SCHEDULE_FILE" ] || fail 'deferred schedule marker should be removed'
 assert_eq "$(cat "$TMP/reload.log")" "reload"
 
 # re-remove is idempotent

@@ -19,6 +19,7 @@ TMP="${TMPDIR:-/tmp}/cfst-runner-test.$$"
 mkdir -p "$TMP/runtime" "$TMP/etc" "$TMP/share" "$TMP/bin"
 MOCK_PID=''
 BG_PID=''
+BASE_PATH="$PATH"
 trap '
     if [ -n "${BG_PID:-}" ]; then kill "$BG_PID" 2>/dev/null || true; wait "$BG_PID" 2>/dev/null || true; fi
     if [ -n "${MOCK_PID:-}" ]; then kill "$MOCK_PID" 2>/dev/null || true; wait "$MOCK_PID" 2>/dev/null || true; fi
@@ -260,10 +261,14 @@ EOF
 }
 
 write_uci() {
-    city="${1:-sz}"
-    isp="${2:-ct}"
+    city="${1-sz}"
+    isp="${2-ct}"
     auto="${3:-0}"
-    providers="${4:-nope.invalid}"
+    if [ "$#" -ge 5 ]; then
+        template="$5"
+    else
+        template='{city}{isp}.{zone}'
+    fi
     cat > "$CFST_TEST_UCI_FILE" <<EOF
 cloudflare-speedtest.main.enabled=1
 cloudflare-speedtest.main.interval_hours=6
@@ -272,7 +277,7 @@ cloudflare-speedtest.main.log_level=info
 cloudflare-speedtest.cloudflare.api_token=test-token-secret-value
 cloudflare-speedtest.cloudflare.zone=domain.com
 cloudflare-speedtest.cloudflare.ttl=1
-cloudflare-speedtest.naming.template={city}{isp}.{zone}
+cloudflare-speedtest.naming.template=${template}
 cloudflare-speedtest.naming.auto_detect=${auto}
 cloudflare-speedtest.naming.city_override=${city}
 cloudflare-speedtest.naming.isp_override=${isp}
@@ -283,15 +288,13 @@ cloudflare-speedtest.test.attempts=4
 cloudflare-speedtest.test.download_count=5
 cloudflare-speedtest.test.download_seconds=10
 cloudflare-speedtest.test.port=443
-cloudflare-speedtest.test.test_url=https://cf.xiu2.xyz/url
+cloudflare-speedtest.test.test_url=https://speed.cloudflare.com/__down?bytes=99000000
 cloudflare-speedtest.test.max_latency_ms=200
 cloudflare-speedtest.test.max_loss_ratio=0.2
 cloudflare-speedtest.test.min_speed_mbps=0.01
 cloudflare-speedtest.test.task_timeout_seconds=900
 cloudflare-speedtest.test.ip_file=${TMP}/share/ip.txt
-cloudflare-speedtest.geo.provider_order=${providers}
 cloudflare-speedtest.geo.request_timeout=1
-cloudflare-speedtest.geo.cache_ttl_hours=72
 EOF
 }
 
@@ -320,7 +323,7 @@ reset_env() {
     export CFST_SLEEP_CMD='true'
     export CFST_NOW=1700000000
     export CFST_NOW_TEXT='2023-11-14 22:13:20'
-    export PATH="$CFST_ROOT/tests/helpers/mock-bin:$PATH"
+    export PATH="$CFST_ROOT/tests/helpers/mock-bin:$BASE_PATH"
     write_uci
     rm -f "$TMP/requests.jsonl"
 }
@@ -384,7 +387,7 @@ assert_contains "$args" ' -dt 10'
 assert_contains "$args" ' -tp 443'
 assert_contains "$args" ' -tl 200'
 assert_contains "$args" ' -tlr 0.2'
-assert_contains "$args" ' -url https://cf.xiu2.xyz/url'
+assert_contains "$args" ' -url https://speed.cloudflare.com/__down?bytes=99000000'
 # absolute -f and -o
 case "$args" in
     *" -f ${TMP}/share/ip.txt"*|*" -f $TMP/share/ip.txt"*) : ;;
@@ -413,6 +416,17 @@ assert_contains "$persistent" '"last_tested":{"ip":"104.18.2.10"'
 case "$persistent" in
     *'"last_published":{"ip"'*) fail "test-only must not set last_published" ;;
 esac
+
+# --- custom relative subdomain path: no geo fields are needed ---
+reset_env
+write_uci '' '' 0 'nope.invalid' cf
+set +e
+run_cli run --mode test-only --trigger manual
+status="$?"
+set -e
+assert_eq "$status" "0"
+persistent="$(state_text)"
+assert_contains "$persistent" 'cf.domain.com'
 
 # --- test-and-update success path ---
 reset_env
@@ -464,6 +478,82 @@ st="$(status_text)"
 assert_contains "$st" '"phase":"failed"'
 assert_contains "$st" 'RESULT_NO_QUALIFIED_IP'
 
+# --- cfst exits 0 without CSV when its latency pre-filter has no candidate ---
+reset_env
+unset CFST_MOCK_CFST_FIXTURE
+set +e
+run_cli run --mode test-only --trigger manual
+status="$?"
+set -e
+assert_eq "$status" "51"
+st="$(status_text)"
+assert_contains "$st" '"phase":"failed"'
+assert_contains "$st" 'RESULT_NO_QUALIFIED_IP'
+# The stable machine-readable error code above is the contract; the localized
+# message may be rendered differently by the host shell locale.
+
+# --- adaptive candidate expansion: 2 -> 3, latency preflight before download ---
+reset_env
+printf '%s\n' 104.18.10.1 104.18.10.2 104.18.10.3 104.18.10.4 > "$TMP/share/ip.txt"
+printf '%s\n' 'cloudflare-speedtest.test.candidate_count=2' >> "$CFST_TEST_UCI_FILE"
+printf '%s\n' 'cloudflare-speedtest.test.test_all=0' >> "$CFST_TEST_UCI_FILE"
+export CFST_MOCK_CFST_FIXTURE="$FIXTURES_R/valid.csv"
+export CFST_MOCK_CFST_DOWNLOAD_FIXTURE="$FIXTURES_R/valid.csv"
+export CFST_MOCK_CFST_PREFLIGHT_FIXTURES="$FIXTURES_R/no-qualified-latency.csv:$FIXTURES_R/valid.csv"
+export CFST_MOCK_CFST_PREFLIGHT_COUNT_FILE="$TMP/preflight-count"
+set +e
+run_cli run --mode test-only --trigger manual
+status="$?"
+set -e
+assert_eq "$status" "0"
+log_text="$(tr -d '\r' < "$CFST_LOG_FILE")"
+assert_contains "$log_text" 'latency_preflight candidates=2'
+assert_contains "$log_text" 'latency_preflight no qualified result; expanding candidates=2 next=3'
+assert_contains "$log_text" 'latency_preflight qualified candidates=3'
+preflight_count="$(grep -c -- ' -dd' "$TMP/cfst.args" || true)"
+assert_eq "$preflight_count" "2"
+last_args="$(tail -n 1 "$TMP/cfst.args")"
+case "$last_args" in
+    *' -dd'*) fail 'download phase must not use latency-only -dd' ;;
+esac
+assert_contains "$last_args" ' -f '
+assert_contains "$(status_text)" '"phase":"success"'
+unset CFST_MOCK_CFST_DOWNLOAD_FIXTURE CFST_MOCK_CFST_PREFLIGHT_FIXTURES CFST_MOCK_CFST_PREFLIGHT_COUNT_FILE
+
+# --- preferred provider + test-all: keep finite returned IPs, do not pass -allip ---
+reset_env
+printf '%s\n' 'cloudflare-speedtest.test.ip_source=preferred' >> "$CFST_TEST_UCI_FILE"
+printf '%s\n' 'cloudflare-speedtest.test.test_all=1' >> "$CFST_TEST_UCI_FILE"
+printf '%s\n' 'cloudflare-speedtest.preferred.provider=ct' >> "$CFST_TEST_UCI_FILE"
+printf '%s\n' 'cloudflare-speedtest.preferred.url_ct=http://preferred.test/ct' >> "$CFST_TEST_UCI_FILE"
+cat > "$TMP/preferred-body" <<'EOF'
+104.18.10.1#CF 电信优选
+104.18.10.2#CF 电信优选
+EOF
+cat > "$TMP/curl" <<'EOF'
+#!/bin/sh
+out=''
+prev=''
+for arg in "$@"; do
+    if [ "$prev" = '--output' ]; then out="$arg"; fi
+    prev="$arg"
+done
+cp "${CFST_PREFERRED_FIXTURE:?}" "$out"
+EOF
+chmod +x "$TMP/curl"
+export CFST_PREFERRED_FIXTURE="$TMP/preferred-body"
+export PATH="$TMP:$PATH"
+# The test fixture supplies a valid CSV; the important contract is the argv.
+set +e
+run_cli run --mode test-only --trigger manual
+status="$?"
+set -e
+assert_eq "$status" "0"
+last_args="$(tail -n 1 "$TMP/cfst.args")"
+case "$last_args" in *' -allip'*) fail 'preferred finite IP list must not receive -allip' ;; esac
+assert_contains "$last_args" ' -f '
+unset CFST_PREFERRED_FIXTURE
+
 # --- GeoIP failure with usable manual override (auto on, bad providers) ---
 reset_env
 write_uci sz ct 1 'nope.invalid'
@@ -494,7 +584,7 @@ persistent="$(state_text)"
 assert_contains "$persistent" '"last_published":{"ip":"1.1.1.1"'
 assert_contains "$persistent" '"last_tested":{"ip":"104.18.2.10"'
 
-# --- new publication + cleanup failure → partial_success 66 ---
+# --- new publication + cleanup failure 鈫?partial_success 66 ---
 reset_env
 write_uci bj cm 0 'nope.invalid'
 cat > "$CFST_STATE_FILE" <<'EOF'
@@ -570,8 +660,10 @@ export CFST_SLEEP_CMD=true
 # --- apply-schedule writes marked cron line ---
 reset_env
 export CFST_CRONTAB_FILE="$TMP/crontab.root"
+export CFST_DEFERRED_SCHEDULE_FILE="$TMP/deferred-schedule"
 export CFST_CRON_RELOAD_CMD="true"
 export CFST_HOSTNAME=host46
+rm -f "$CFST_DEFERRED_SCHEDULE_FILE"
 : > "$CFST_CRONTAB_FILE"
 set +e
 run_cli apply-schedule
@@ -581,7 +673,7 @@ assert_eq "$status" "0"
 cron_text="$(tr -d '\r' < "$CFST_CRONTAB_FILE")"
 assert_contains "$cron_text" '17 */6 * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron'
 assert_contains "$cron_text" 'cloudflare-speedtest'
-unset CFST_CRONTAB_FILE CFST_CRON_RELOAD_CMD CFST_HOSTNAME
+unset CFST_CRONTAB_FILE CFST_DEFERRED_SCHEDULE_FILE CFST_CRON_RELOAD_CMD CFST_HOSTNAME
 
 # --- status / result / logs read-only smoke ---
 reset_env

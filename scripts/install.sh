@@ -44,7 +44,7 @@ case "$VERSION" in
 esac
 
 if [ -z "$BASE_URL" ]; then
-	BASE_URL="https://github.com/anomalyco/CloudflareSpeedTest/releases/download/${TAG}"
+	BASE_URL="https://github.com/TalkItNextTime/N60Pro-CFSpeedTest/releases/download/${TAG}"
 fi
 
 # Architecture gate: only N60 Pro target arch is supported.

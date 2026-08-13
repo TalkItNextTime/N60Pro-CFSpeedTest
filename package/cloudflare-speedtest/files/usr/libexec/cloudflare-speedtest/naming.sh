@@ -102,6 +102,14 @@ choose_location_field() {
     fi
 }
 
+naming_template_is_custom() {
+    template="$1"
+    case "$template" in
+        *'{'*|*'}'*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 render_hostname() {
     template="$1"
     city="$2"
@@ -111,34 +119,63 @@ render_hostname() {
     CFST_ERROR_CODE=''
     CFST_ERROR_MESSAGE=''
 
-    [ -n "$city" ] || {
-        CFST_ERROR_CODE='NAMING_UNRESOLVED'
-        CFST_ERROR_MESSAGE='城市字段为空'
-        return 40
-    }
-    [ -n "$isp" ] || {
-        CFST_ERROR_CODE='NAMING_UNRESOLVED'
-        CFST_ERROR_MESSAGE='运营商字段为空'
-        return 40
-    }
     [ -n "$zone" ] || {
         CFST_ERROR_CODE='NAMING_UNRESOLVED'
-        CFST_ERROR_MESSAGE='Zone字段为空'
+        CFST_ERROR_MESSAGE='Zone 字段为空'
         return 40
     }
 
-    # Replace known placeholders using awk (BusyBox-safe, no bash ${//} needed)
-    result="$(printf '%s' "$template" | awk -v city="$city" -v isp="$isp" -v zone="$zone" '
-        {
-            line = $0
-            gsub(/\{city\}/, city, line)
-            gsub(/\{isp\}/, isp, line)
-            gsub(/\{zone\}/, zone, line)
-            print line
-        }
-    ')"
+    # A template without a supported placeholder is a custom relative
+    # subdomain.  This is the normal mode: e.g. "cf" becomes
+    # "cf.example.com".  Keep the old placeholder syntax for existing UCI
+    # configurations and for users who still want location-based names.
+    [ -n "$template" ] || {
+        CFST_ERROR_CODE='NAMING_UNRESOLVED'
+        CFST_ERROR_MESSAGE='模板不能为空'
+        return 40
+    }
 
-    # Reject any remaining unknown placeholders
+    case "$template" in
+        *'{'*'}'*)
+            # Replace known placeholders using awk (BusyBox-safe, no bash
+            # ${//} needed).  Only placeholders that are actually used need
+            # their corresponding location field.
+            case "$template" in
+                *'{city}'*)
+                    [ -n "$city" ] || {
+                        CFST_ERROR_CODE='NAMING_UNRESOLVED'
+                        CFST_ERROR_MESSAGE='城市字段为空'
+                        return 40
+                    }
+                    ;;
+            esac
+            case "$template" in
+                *'{isp}'*)
+                    [ -n "$isp" ] || {
+                        CFST_ERROR_CODE='NAMING_UNRESOLVED'
+                        CFST_ERROR_MESSAGE='运营商字段为空'
+                        return 40
+                    }
+                    ;;
+            esac
+            result="$(printf '%s' "$template" | awk -v city="$city" -v isp="$isp" -v zone="$zone" '
+                {
+                    line = $0
+                    gsub(/\{city\}/, city, line)
+                    gsub(/\{isp\}/, isp, line)
+                    gsub(/\{zone\}/, zone, line)
+                    print line
+                }
+            ')"
+            ;;
+        *)
+            # Custom values are relative to the configured Cloudflare Zone;
+            # they must not include the Zone themselves.
+            result="${template}.${zone}"
+            ;;
+    esac
+
+    # Reject any remaining unknown placeholders and validate the final FQDN.
     case "$result" in
         *'{'*'}'*)
             CFST_ERROR_CODE='NAMING_UNRESOLVED'

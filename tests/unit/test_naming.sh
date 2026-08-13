@@ -60,6 +60,10 @@ assert_eq "$(choose_location_field "" "" "" "sh")" "sh"
 assert_eq "$(choose_location_field "" "" "" "")" ""
 
 # --- render_hostname ---
+# Custom relative subdomain: location fields are not required.
+assert_eq "$(render_hostname "cf" "" "" "domain.com")" "cf.domain.com"
+assert_eq "$(render_hostname "edge.node" "" "" "domain.com")" "edge.node.domain.com"
+assert_eq "$(render_hostname "cf-edge" "unknown" "unknown" "domain.com")" "cf-edge.domain.com"
 assert_eq "$(render_hostname "{city}{isp}.{zone}" "sz" "ct" "domain.com")" "szct.domain.com"
 assert_eq "$(render_hostname "{isp}-{city}.{zone}" "sz" "ct" "domain.com")" "ct-sz.domain.com"
 assert_eq "$(render_hostname "{zone}" "sz" "ct" "domain.com")" "domain.com"
@@ -78,6 +82,28 @@ long_label="$(awk 'BEGIN { for (i = 0; i < 64; i++) printf "a" }')"
 assert_status 40 validate_hostname "${long_label}.domain.com"
 long_fqdn="$(awk 'BEGIN { for (i = 0; i < 254; i++) printf "a" }')"
 assert_status 40 validate_hostname "${long_fqdn}"
+
+# --- custom subdomain validation ---
+set +e
+render_hostname "CF" "" "" "domain.com" >/dev/null
+status="$?"
+set -e
+assert_eq "$status" "40"
+assert_eq "$CFST_ERROR_CODE" "NAMING_UNRESOLVED"
+
+set +e
+render_hostname "edge_node" "" "" "domain.com" >/dev/null
+status="$?"
+set -e
+assert_eq "$status" "40"
+assert_eq "$CFST_ERROR_CODE" "NAMING_UNRESOLVED"
+
+set +e
+render_hostname "" "" "" "domain.com" >/dev/null
+status="$?"
+set -e
+assert_eq "$status" "40"
+assert_eq "$CFST_ERROR_CODE" "NAMING_UNRESOLVED"
 
 # --- render_hostname missing values → NAMING_UNRESOLVED ---
 set +e

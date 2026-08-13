@@ -153,13 +153,17 @@ cf_api() {
 
         case "$http_code" in
             ''|*[!0-9]*)
-                if [ "$curl_status" -ne 0 ]; then
-                    http_code=0
-                else
-                    http_code=0
-                fi
+                # curl's -w output is empty/invalid when the request cannot
+                # reach the endpoint. Keep a distinct synthetic status so
+                # callers classify it as a temporary API failure.
+                http_code=0
                 ;;
         esac
+        if [ "$http_code" = 0 ] && [ "$curl_status" -ne 0 ]; then
+            if command -v cfst_log >/dev/null 2>&1; then
+                cfst_log error "cf_api ${method} ${path} curl failed exit=${curl_status}"
+            fi
+        fi
         CFST_HTTP_STATUS="$http_code"
         printf '%s\n' "$http_code" > "$status_file"
 
@@ -304,8 +308,10 @@ cf_upsert_a_record() {
 
     escaped_name="$(json_escape "$fqdn")"
     escaped_ip="$(json_escape "$ip")"
-    body="$(printf '{"type":"A","name":"%s","content":"%s","ttl":%s,"proxied":false}' \
-        "$escaped_name" "$escaped_ip" "$ttl")"
+    proxied=false
+    [ "${CFST_PROXIED:-0}" = "1" ] && proxied=true
+    body="$(printf '{"type":"A","name":"%s","content":"%s","ttl":%s,"proxied":%s}' \
+        "$escaped_name" "$escaped_ip" "$ttl" "$proxied")"
 
     if [ -n "$existing_id" ]; then
         cf_api PUT "/zones/${zone_id}/dns_records/${existing_id}" "$body" || return $?
