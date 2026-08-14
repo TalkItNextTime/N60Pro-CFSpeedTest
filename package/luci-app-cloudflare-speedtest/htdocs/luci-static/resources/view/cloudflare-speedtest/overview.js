@@ -512,6 +512,25 @@ function renderLogsPanel(view) {
 	]);
 }
 
+/*
+ * The preferred-provider fields are displayed in the `main` form section but
+ * belong to the named `preferred` UCI section. `ucisection` is supported by
+ * recent LuCI releases, but explicit load/write handlers keep this alias
+ * working on older 24.x builds as well and make the persistence target
+ * unambiguous.
+ */
+function bindPreferredOption(option) {
+	option.ucisection = 'preferred';
+	option.load = function() {
+		return uci.get('cloudflare-speedtest', 'preferred', this.ucioption || this.option);
+	};
+	option.write = function(section_id, value) {
+		return uci.set('cloudflare-speedtest', 'preferred',
+			this.ucioption || this.option, value);
+	};
+	return option;
+}
+
 function buildConfigMap(view, summary) {
 	var m = new form.Map('cloudflare-speedtest', _('配置'),
 		_('保存配置不会自动启动测速；请使用上方手动操作按钮。'));
@@ -695,8 +714,7 @@ function buildConfigMap(view, summary) {
 	o.default = '0';
 	o.description = _('忽略随机候选数量，测试来源中的全部 IP。');
 
-	o = s.taboption('speedtest', form.ListValue, 'provider', _('优选反代提供商'));
-	o.ucisection = 'preferred';
+	o = bindPreferredOption(s.taboption('speedtest', form.ListValue, 'provider', _('优选反代提供商')));
 	o.value('auto', _('自动根据本地运营商选择'));
 	o.value('ct', _('电信'));
 	o.value('cu', _('联通'));
@@ -706,28 +724,23 @@ function buildConfigMap(view, summary) {
 	o.rmempty = false;
 	o.description = _('选择仅测试指定的优选反代网址中的 IP。');
 
-	o = s.taboption('speedtest', form.Value, 'url_ct', _('电信优选 URL'));
-	o.ucisection = 'preferred';
+	o = bindPreferredOption(s.taboption('speedtest', form.Value, 'url_ct', _('电信优选 URL')));
 	o.default = ['https', '://cf.090227.xyz/ct?ips=20'].join('');
 	o.rmempty = false;
 
-	o = s.taboption('speedtest', form.Value, 'url_cu', _('联通优选 URL'));
-	o.ucisection = 'preferred';
+	o = bindPreferredOption(s.taboption('speedtest', form.Value, 'url_cu', _('联通优选 URL')));
 	o.default = ['https', '://cf.090227.xyz/cu?ips=20'].join('');
 	o.rmempty = false;
 
-	o = s.taboption('speedtest', form.Value, 'url_cmcc', _('移动优选 URL'));
-	o.ucisection = 'preferred';
+	o = bindPreferredOption(s.taboption('speedtest', form.Value, 'url_cmcc', _('移动优选 URL')));
 	o.default = ['https', '://cf.090227.xyz/cmcc?ips=20'].join('');
 	o.rmempty = false;
 
-	o = s.taboption('speedtest', form.Value, 'url_custom', _('自定义优选 URL'));
-	o.ucisection = 'preferred';
+	o = bindPreferredOption(s.taboption('speedtest', form.Value, 'url_custom', _('自定义优选 URL')));
 	o.placeholder = _('填写返回 IPv4 地址列表的 URL');
 	o.description = _('URL 应返回 IPv4 地址，每行一个 IP；也支持文本中包含 IP 的格式。');
 
-	o = s.taboption('speedtest', form.Value, 'timeout', _('优选 URL 超时（秒）'));
-	o.ucisection = 'preferred';
+	o = bindPreferredOption(s.taboption('speedtest', form.Value, 'timeout', _('优选 URL 超时（秒）')));
 	o.datatype = 'and(uinteger,min(1),max(60))';
 	o.default = '15';
 

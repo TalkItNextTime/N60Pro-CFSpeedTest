@@ -1,6 +1,15 @@
 # Cloudflare 优选 IP for N60 Pro
 
-本版本提供 N60 Pro / XploreWrt 的正式 OpenWrt 安装包：
+本版本修复了 N60 Pro / XploreWrt 上的测速任务启动、优选 URL 保存和测速速度单位问题。
+
+## 修复内容
+
+- 修复点击“立即测速并更新 DNS”后仅显示“已接受”、后台任务未实际开始测速的问题。
+- 修复 LuCI 中电信、联通、移动及自定义优选 URL 修改后提示“没有待应用的更改”的问题。
+- 修复 CloudflareSpeedTest CSV 中的下载速度（MB/s）与界面 Mbps 配置阈值之间的单位换算。
+- 增加运行时 Shell 脚本 LF 换行检查，避免 CRLF 导致 BusyBox `ash` 执行失败。
+
+## 安装包
 
 - `cloudflare-speedtest_*.ipk`：测速、调度和 Cloudflare DNS 更新核心。
 - `luci-app-cloudflare-speedtest_*.ipk`：LuCI 管理界面。
@@ -26,7 +35,6 @@ printf '%s\n' "$DISTRIB_ARCH"
 sha256sum -c SHA256SUMS
 scp cloudflare-speedtest_*.ipk luci-app-cloudflare-speedtest_*.ipk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1 '
-  opkg update
   opkg install /tmp/cloudflare-speedtest_*.ipk
   opkg install /tmp/luci-app-cloudflare-speedtest_*.ipk
   /etc/init.d/rpcd restart
@@ -34,11 +42,11 @@ ssh root@192.168.1.1 '
 '
 ```
 
-将 `192.168.1.1` 替换为自己的路由器地址。
+请将 `192.168.1.1` 替换为路由器地址。升级时会保留已有的 `/etc/config/cloudflare-speedtest` 配置。
 
-### 安装脚本
+### 使用安装脚本
 
-也可在路由器中下载本 Release 的 `install.sh`，并以本 Release 的标签替换 `<tag>`：
+也可以在路由器中下载本 Release 的 `install.sh`：
 
 ```sh
 wget -O /tmp/install.sh \
@@ -46,11 +54,13 @@ wget -O /tmp/install.sh \
 sh /tmp/install.sh --version <tag>
 ```
 
-安装后进入 LuCI 的 **服务 → Cloudflare 优选 IP**，在「基本设置」保存 Cloudflare API Token 与 Zone。Token 最小权限为 `Zone:Read` 与 `DNS:Edit`。
+安装后进入 LuCI 的 **服务 → Cloudflare 优选 IP**。如浏览器仍显示旧界面，请使用 `Ctrl + F5` 强制刷新。
 
-## 说明
+## Cloudflare Token
 
-- 支持灰云（仅 DNS）与橙云（Cloudflare Proxy）切换。
-- 默认测速 URL 为 Cloudflare 官方下载端点的 `99000000` 字节参数版本。
-- 透明代理可能影响测速和归属查询；请确保相关请求绕过透明代理。
-- 卸载插件不会删除已发布到 Cloudflare 的 DNS 记录。
+请使用仅作用于目标 Zone 的 API Token，最小权限为：
+
+- `Zone:Read`
+- `DNS:Edit`
+
+不要使用 Global API Key。Token 会写入路由器 UCI 配置，请保护好路由器后台、备份文件和 SSH 登录权限。

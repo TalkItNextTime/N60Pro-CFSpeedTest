@@ -71,6 +71,15 @@ assert_contains "$js" "o.value('1'"
 assert_contains "$js" 'handleSaveApply: function'
 assert_contains "$js" 'handleSave: function'
 assert_contains "$js" 'handleReset: function'
+assert_contains "$js" 'function bindPreferredOption(option)'
+assert_contains "$js" "uci.get('cloudflare-speedtest', 'preferred'"
+assert_contains "$js" "uci.set('cloudflare-speedtest', 'preferred'"
+# Preferred URL edits must stage changes in cloudflare-speedtest.preferred,
+# not in the visual main section used to render the tabbed form.
+assert_contains "$js" "bindPreferredOption(s.taboption('speedtest', form.Value, 'url_ct'"
+assert_contains "$js" "bindPreferredOption(s.taboption('speedtest', form.Value, 'url_cu'"
+assert_contains "$js" "bindPreferredOption(s.taboption('speedtest', form.Value, 'url_cmcc'"
+assert_contains "$js" "bindPreferredOption(s.taboption('speedtest', form.Value, 'url_custom'"
 if printf '%s\n' "$js" | grep -F "var logs = renderLogsPanel(view)" >/dev/null 2>&1; then
 	fail 'runtime logs must not be rendered below the configuration map'
 fi

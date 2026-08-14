@@ -94,6 +94,29 @@ do
     assert_file_exists "$FILES_ROOT/$rel"
 done
 
+# Shell scripts must use LF only. BusyBox ash treats CRLF as literal tokens
+# (for example, "\r: not found"), which can make an accepted RPC task exit
+# before it reaches the testing phase.
+for rel in \
+    usr/bin/cloudflare-speedtest \
+    usr/libexec/cloudflare-speedtest/candidates.sh \
+    usr/libexec/cloudflare-speedtest/config.sh \
+    usr/libexec/cloudflare-speedtest/dns.sh \
+    usr/libexec/cloudflare-speedtest/geoip.sh \
+    usr/libexec/cloudflare-speedtest/lock.sh \
+    usr/libexec/cloudflare-speedtest/log.sh \
+    usr/libexec/cloudflare-speedtest/naming.sh \
+    usr/libexec/cloudflare-speedtest/preferred.sh \
+    usr/libexec/cloudflare-speedtest/result.sh \
+    usr/libexec/cloudflare-speedtest/runner.sh \
+    usr/libexec/cloudflare-speedtest/schedule.sh \
+    usr/libexec/cloudflare-speedtest/state.sh
+ do
+    if grep -q "$(printf '\r')" "$FILES_ROOT/$rel"; then
+        fail "$rel must use LF line endings"
+    fi
+done
+
 # --- ip.txt: bare IPv4 CIDR lines only (CFST does not accept comments) ---
 assert_file_exists "$IP_TXT"
 while IFS= read -r line || [ -n "$line" ]; do

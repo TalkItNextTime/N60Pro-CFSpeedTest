@@ -92,7 +92,7 @@ validate_cfst_header() {
     return 0
 }
 
-# candidate_is_qualified IP SENT RECV LOSS LATENCY SPEED MAX_LATENCY MAX_LOSS MIN_SPEED
+# candidate_is_qualified IP SENT RECV LOSS LATENCY SPEED_MB_S MAX_LATENCY MAX_LOSS MIN_SPEED_MBPS
 candidate_is_qualified() {
     ip="$1"
     sent="$2"
@@ -122,9 +122,11 @@ candidate_is_qualified() {
     # loss in [0, max_loss]
     _number_ge "$loss" 0 || return 1
     _number_le "$loss" "$max_loss" || return 1
-    # speed finite non-negative and >= min
+    # CFST CSV reports MB/s, while the plugin setting is Mbps.
+    # Convert the configured threshold to the CSV unit before comparing.
     _number_ge "$speed" 0 || return 1
-    _number_ge "$speed" "$min_speed" || return 1
+    min_speed_mb_s="$(awk -v mbps="$min_speed" 'BEGIN { printf "%.10f", mbps / 8 }')"
+    _number_ge "$speed" "$min_speed_mb_s" || return 1
     return 0
 }
 
@@ -194,7 +196,9 @@ select_best_result() {
     : > "$qualified"
 
     # Skip header; contract: simple comma fields, no quoted commas.
-    awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" -v min_speed="$min_speed" '
+    # The upstream CSV speed column is MB/s. The plugin setting is Mbps, so
+    # compare against min_speed / 8 and expose the selected value as Mbps.
+    awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" -v min_speed_mbps="$min_speed" '
         function is_num(v) { return v ~ /^[0-9]+([.][0-9]+)?$/ }
         function is_public_ipv4(ip,   n, a, i) {
             n = split(ip, a, ".")
@@ -232,7 +236,7 @@ select_best_result() {
             if (recv + 0 <= 0) next
             if (latency + 0 <= 0 || latency + 0 > max_latency + 0) next
             if (loss + 0 < 0 || loss + 0 > max_loss + 0) next
-            if (speed + 0 < 0 || speed + 0 < min_speed + 0) next
+            if (speed + 0 < 0 || speed + 0 < (min_speed_mbps + 0) / 8) next
             # emit stable row for sort: loss, latency, speed kept as original fields
             printf "%s,%s,%s,%s,%s,%s,%s\n", ip, sent, recv, loss, latency, speed, colo
         }
@@ -262,7 +266,8 @@ select_best_result() {
 
     loss_out="$(_normalize_number "$loss")"
     latency_out="$(_normalize_number "$latency")"
-    speed_out="$(_normalize_number "$speed")"
+    # Upstream writes MB/s; keep the plugin/API contract in Mbps.
+    speed_out="$(_normalize_number "$(awk -v mbps="$speed" 'BEGIN { printf "%.10f", mbps * 8 }')")"
 
     escaped_ip="$(json_escape "$ip")"
     escaped_colo="$(json_escape "$colo")"
