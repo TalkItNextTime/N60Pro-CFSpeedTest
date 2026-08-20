@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cloudflare-speedtest
 PKG_VERSION:=2.3.5
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 # Pinned upstream v2.3.5 (commit below). Checksum is for the exact codeload archive.
 # See upstream/cloudflare-speedtest.version — do not substitute floating refs.

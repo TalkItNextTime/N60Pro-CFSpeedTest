@@ -96,7 +96,7 @@ load_config() {
 
     CFST_THREADS="$(cfst_config_get test threads 50)"
     CFST_ATTEMPTS="$(cfst_config_get test attempts 4)"
-    CFST_DOWNLOAD_COUNT="$(cfst_config_get test download_count 5)"
+    CFST_DOWNLOAD_COUNT="$(cfst_config_get test download_count 10)"
     CFST_DOWNLOAD_SECONDS="$(cfst_config_get test download_seconds 10)"
     CFST_PORT="$(cfst_config_get test port 443)"
     CFST_TEST_URL="$(cfst_config_get test test_url 'https://speed.cloudflare.com/__down?bytes=99000000')"

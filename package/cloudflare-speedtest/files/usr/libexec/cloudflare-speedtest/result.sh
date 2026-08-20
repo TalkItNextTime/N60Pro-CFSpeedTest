@@ -171,6 +171,63 @@ result_has_qualified_latency() {
     ' "$file"
 }
 
+_CFST_AWK_IS_PUBLIC_IPV4='
+    function is_public_ipv4(ip,   n, a, i) {
+        n = split(ip, a, ".")
+        if (n != 4) return 0
+        for (i = 1; i <= 4; i++) {
+            if (a[i] !~ /^[0-9]+$/ || length(a[i]) > 3) return 0
+            if (length(a[i]) > 1 && substr(a[i], 1, 1) == "0") return 0
+            if (a[i] + 0 > 255) return 0
+        }
+        if (a[1] + 0 == 0) return 0
+        if (a[1] + 0 == 127) return 0
+        if (a[1] + 0 == 10) return 0
+        if (a[1] + 0 == 172 && a[2] + 0 >= 16 && a[2] + 0 <= 31) return 0
+        if (a[1] + 0 == 192 && a[2] + 0 == 168) return 0
+        if (a[1] + 0 == 169 && a[2] + 0 == 254) return 0
+        if (a[1] + 0 >= 224) return 0
+        if (a[1] + 0 == 192 && a[2] + 0 == 0 && a[3] + 0 == 2) return 0
+        if (a[1] + 0 == 198 && a[2] + 0 == 51 && a[3] + 0 == 100) return 0
+        if (a[1] + 0 == 203 && a[2] + 0 == 0 && a[3] + 0 == 113) return 0
+        return 1
+    }
+'
+
+# result_reject_summary FILE MAX_LATENCY MAX_LOSS MIN_SPEED_MBPS
+# One-line breakdown of how the CSV rows scored against each gate. Logged when
+# selection finds nothing so the log alone shows which gate emptied the set.
+result_reject_summary() {
+    file="$1"
+    max_latency="$2"
+    max_loss="$3"
+    min_speed="$4"
+    if [ ! -f "$file" ]; then
+        printf 'rows=0 csv=missing'
+        return 0
+    fi
+    awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" -v min_speed_mbps="$min_speed" "
+        function is_num(v) { return v ~ /^[0-9]+([.][0-9]+)?\$/ }
+        $_CFST_AWK_IS_PUBLIC_IPV4"'
+        NR == 1 { next }
+        {
+            sub(/\r$/, "", $0)
+            if ($0 == "") next
+            rows++
+            if (NF != 7 || !is_num($3) || !is_num($4) || !is_num($5) || !is_num($6)) { malformed++; next }
+            if (!is_public_ipv4($1)) { nonpublic++; next }
+            if ($3 + 0 <= 0 || $4 + 0 < 0 || $4 + 0 > max_loss + 0) { loss_rejected++; next }
+            if ($5 + 0 <= 0 || $5 + 0 > max_latency + 0) { latency_rejected++; next }
+            gate_ok++
+            if ($6 + 0 > best_speed) best_speed = $6 + 0
+        }
+        END {
+            printf "rows=%d malformed=%d nonpublic=%d loss_rejected=%d latency_rejected=%d latency_loss_ok=%d max_speed_mbps=%.3f required_mbps=%s",
+                rows, malformed, nonpublic, loss_rejected, latency_rejected, gate_ok, best_speed * 8, min_speed_mbps
+        }
+    ' "$file"
+}
+
 # select_best_result FILE MAX_LATENCY MAX_LOSS MIN_SPEED
 # Prints one compact JSON object for the best qualified candidate.
 # Exit 50 RESULT_BAD_CSV or 51 RESULT_NO_QUALIFIED_IP on failure.
@@ -189,37 +246,15 @@ select_best_result() {
         return "$header_status"
     fi
 
-    mkdir -p "${CFST_TASK_DIR:-/tmp}" 2>/dev/null || true
-    qualified="${CFST_TASK_DIR:-/tmp}/qualified.$$"
-    sorted="${CFST_TASK_DIR:-/tmp}/sorted.$$"
-
-    : > "$qualified"
-
     # Skip header; contract: simple comma fields, no quoted commas.
     # The upstream CSV speed column is MB/s. The plugin setting is Mbps, so
     # compare against min_speed / 8 and expose the selected value as Mbps.
-    awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" -v min_speed_mbps="$min_speed" '
-        function is_num(v) { return v ~ /^[0-9]+([.][0-9]+)?$/ }
-        function is_public_ipv4(ip,   n, a, i) {
-            n = split(ip, a, ".")
-            if (n != 4) return 0
-            for (i = 1; i <= 4; i++) {
-                if (a[i] !~ /^[0-9]+$/ || length(a[i]) > 3) return 0
-                if (length(a[i]) > 1 && substr(a[i], 1, 1) == "0") return 0
-                if (a[i] + 0 > 255) return 0
-            }
-            if (a[1] + 0 == 0) return 0
-            if (a[1] + 0 == 127) return 0
-            if (a[1] + 0 == 10) return 0
-            if (a[1] + 0 == 172 && a[2] + 0 >= 16 && a[2] + 0 <= 31) return 0
-            if (a[1] + 0 == 192 && a[2] + 0 == 168) return 0
-            if (a[1] + 0 == 169 && a[2] + 0 == 254) return 0
-            if (a[1] + 0 >= 224) return 0
-            if (a[1] + 0 == 192 && a[2] + 0 == 0 && a[3] + 0 == 2) return 0
-            if (a[1] + 0 == 198 && a[2] + 0 == 51 && a[3] + 0 == 100) return 0
-            if (a[1] + 0 == 203 && a[2] + 0 == 0 && a[3] + 0 == 113) return 0
-            return 1
-        }
+    # Ranking happens here rather than via sort: BusyBox sort on some OpenWrt
+    # builds silently ignores -t/-k and falls back to whole-line lexicographic
+    # order, which picked the lowest-numbered IP instead of the fastest.
+    best="$(awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" -v min_speed_mbps="$min_speed" "
+        function is_num(v) { return v ~ /^[0-9]+([.][0-9]+)?\$/ }
+        $_CFST_AWK_IS_PUBLIC_IPV4"'
         NR == 1 { next }
         {
             sub(/\r$/, "", $0)
@@ -237,32 +272,37 @@ select_best_result() {
             if (latency + 0 <= 0 || latency + 0 > max_latency + 0) next
             if (loss + 0 < 0 || loss + 0 > max_loss + 0) next
             if (speed + 0 < 0 || speed + 0 < (min_speed_mbps + 0) / 8) next
-            # emit stable row for sort: loss, latency, speed kept as original fields
-            printf "%s,%s,%s,%s,%s,%s,%s\n", ip, sent, recv, loss, latency, speed, colo
+            # speed desc, then latency asc, then loss asc
+            better = 0
+            if (best_ip == "") better = 1
+            else if (speed + 0 > best_speed + 0) better = 1
+            else if (speed + 0 == best_speed + 0) {
+                if (latency + 0 < best_latency + 0) better = 1
+                else if (latency + 0 == best_latency + 0 && loss + 0 < best_loss + 0) better = 1
+            }
+            if (better) {
+                best_ip = ip
+                best_loss = loss
+                best_latency = latency
+                best_speed = speed
+                best_colo = colo
+            }
         }
-    ' "$file" > "$qualified"
+        END {
+            if (best_ip != "") printf "%s,%s,%s,%s,%s\n", best_ip, best_loss, best_latency, best_speed, best_colo
+        }
+    ' "$file")"
 
-    if [ ! -s "$qualified" ]; then
-        rm -f "$qualified" "$sorted"
+    if [ -z "$best" ]; then
         set_result_error RESULT_NO_QUALIFIED_IP '没有符合条件的测速结果' 51
         return $?
     fi
 
-    # speed desc, latency asc, loss asc
-    sort -t, -k6,6nr -k5,5n -k4,4n "$qualified" > "$sorted"
-
-    best="$(head -n 1 "$sorted")"
-    rm -f "$qualified" "$sorted"
-    [ -n "$best" ] || {
-        set_result_error RESULT_NO_QUALIFIED_IP '没有符合条件的测速结果' 51
-        return $?
-    }
-
     ip="$(printf '%s\n' "$best" | awk -F, '{print $1}')"
-    loss="$(printf '%s\n' "$best" | awk -F, '{print $4}')"
-    latency="$(printf '%s\n' "$best" | awk -F, '{print $5}')"
-    speed="$(printf '%s\n' "$best" | awk -F, '{print $6}')"
-    colo="$(printf '%s\n' "$best" | awk -F, '{print $7}')"
+    loss="$(printf '%s\n' "$best" | awk -F, '{print $2}')"
+    latency="$(printf '%s\n' "$best" | awk -F, '{print $3}')"
+    speed="$(printf '%s\n' "$best" | awk -F, '{print $4}')"
+    colo="$(printf '%s\n' "$best" | awk -F, '{print $5}')"
 
     loss_out="$(_normalize_number "$loss")"
     latency_out="$(_normalize_number "$latency")"

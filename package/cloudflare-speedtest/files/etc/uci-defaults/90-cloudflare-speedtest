@@ -52,7 +52,7 @@ ensure_option naming fallback_isp ''
 ensure_section test test
 ensure_option test threads 50
 ensure_option test attempts 4
-ensure_option test download_count 5
+ensure_option test download_count 10
 ensure_option test download_seconds 10
 ensure_option test port 443
 ensure_option test test_url 'https://speed.cloudflare.com/__down?bytes=99000000'

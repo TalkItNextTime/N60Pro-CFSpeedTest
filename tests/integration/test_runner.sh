@@ -477,6 +477,23 @@ assert_eq "$status" "51"
 st="$(status_text)"
 assert_contains "$st" '"phase":"failed"'
 assert_contains "$st" 'RESULT_NO_QUALIFIED_IP'
+# The log must name the gate that emptied the set, so a run that fails only on
+# download speed is distinguishable from one that fails on latency or loss.
+log="$(tr -d '\r' < "$CFST_LOG_FILE")"
+assert_contains "$log" 'result_reject rows='
+assert_contains "$log" 'max_speed_mbps='
+
+# --- a malformed CSV reports the header error, not the generic no-qualified one ---
+reset_env
+export CFST_MOCK_CFST_FIXTURE="$FIXTURES_R/bad-header.csv"
+set +e
+run_cli run --mode test-only --trigger manual
+status="$?"
+set -e
+assert_eq "$status" "50"
+st="$(status_text)"
+assert_contains "$st" '"phase":"failed"'
+assert_contains "$st" 'RESULT_BAD_CSV'
 
 # --- cfst exits 0 without CSV when its latency pre-filter has no candidate ---
 reset_env
@@ -491,6 +508,9 @@ assert_contains "$st" '"phase":"failed"'
 assert_contains "$st" 'RESULT_NO_QUALIFIED_IP'
 # The stable machine-readable error code above is the contract; the localized
 # message may be rendered differently by the host shell locale.
+# An empty CSV from the download pass means -sl rejected every candidate, so the
+# log has to say so; there is no CSV left for result_reject to summarize.
+assert_contains "$(tr -d '\r' < "$CFST_LOG_FILE")" 'download_reject no candidate reached required_mbps='
 
 # --- adaptive candidate expansion: 2 -> 3, latency preflight before download ---
 reset_env
@@ -517,6 +537,13 @@ case "$last_args" in
     *' -dd'*) fail 'download phase must not use latency-only -dd' ;;
 esac
 assert_contains "$last_args" ' -f '
+# -sl belongs to the download pass only, so cfst keeps testing past unusable
+# low-latency IPs instead of stopping after -dn addresses.
+assert_contains "$last_args" ' -sl 0.001250'
+first_args="$(head -n 1 "$TMP/cfst.args")"
+case "$first_args" in
+    *' -sl '*) fail 'latency preflight must not pass -sl' ;;
+esac
 assert_contains "$(status_text)" '"phase":"success"'
 unset CFST_MOCK_CFST_DOWNLOAD_FIXTURE CFST_MOCK_CFST_PREFLIGHT_FIXTURES CFST_MOCK_CFST_PREFLIGHT_COUNT_FILE
 

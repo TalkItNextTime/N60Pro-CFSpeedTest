@@ -118,12 +118,17 @@ runner_run_cfst() {
 
     threads="${CFST_THREADS:-50}"
     attempts="${CFST_ATTEMPTS:-4}"
-    download_count="${CFST_DOWNLOAD_COUNT:-5}"
+    download_count="${CFST_DOWNLOAD_COUNT:-10}"
     download_seconds="${CFST_DOWNLOAD_SECONDS:-10}"
     port="${CFST_PORT:-443}"
     max_latency="${CFST_MAX_LATENCY_MS:-200}"
     max_loss="${CFST_MAX_LOSS_RATIO:-0.2}"
     test_url="${CFST_TEST_URL:-https://speed.cloudflare.com/__down?bytes=99000000}"
+    # Without -sl, cfst download-tests exactly -dn addresses and stops, so a few
+    # unusable low-latency IPs sink the whole run. With -sl it keeps going until
+    # it has collected -dn addresses that actually meet the floor. cfst -sl is
+    # MB/s; the plugin setting is Mbps.
+    min_speed_mb_s="$(awk -v mbps="${CFST_MIN_SPEED_MBPS:-0}" 'BEGIN { printf "%.6f", mbps / 8 }')"
     timeout="${CFST_TASK_TIMEOUT:-900}"
     if [ -n "${CFST_TASK_TIMEOUT_OVERRIDE:-}" ]; then
         timeout="$CFST_TASK_TIMEOUT_OVERRIDE"
@@ -167,12 +172,12 @@ runner_run_cfst() {
         "$CFST_CFST_BIN" -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -url "$test_url" -allip &
+            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" -allip &
     else
         "$CFST_CFST_BIN" -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -url "$test_url" &
+            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" &
     fi
     CFST_CHILD_PID=$!
 
@@ -551,6 +556,9 @@ run_task() {
     set -e
     if [ "$cfst_status" -ne 0 ]; then
         if [ "$cfst_status" -eq 51 ]; then
+            # With -sl in play, an empty CSV here means every candidate was
+            # download-tested and none reached the floor.
+            cfst_log warn "download_reject no candidate reached required_mbps=${CFST_MIN_SPEED_MBPS} dn=${CFST_DOWNLOAD_COUNT}"
             runner_fail RESULT_NO_QUALIFIED_IP '没有符合当前测速条件的结果' 51
         fi
         return "$cfst_status"
@@ -563,11 +571,16 @@ run_task() {
     # --- validating_result ---
     state_set_phase validating_result '正在验证测速结果'
     cfst_log info 'phase=validating_result'
+    # Redirect instead of command substitution: select_best_result reports the
+    # precise failure through CFST_ERROR_CODE/MESSAGE, which a subshell drops.
+    best_file="$CFST_TASK_DIR/best.json"
     set +e
-    best="$(select_best_result "$out_abs" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" "$CFST_MIN_SPEED_MBPS")"
+    select_best_result "$out_abs" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" "$CFST_MIN_SPEED_MBPS" > "$best_file"
     result_status=$?
     set -e
+    best="$(cat "$best_file" 2>/dev/null || true)"
     if [ "$result_status" -ne 0 ]; then
+        cfst_log warn "result_reject $(result_reject_summary "$out_abs" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" "$CFST_MIN_SPEED_MBPS") csv=$out_abs"
         code="${CFST_ERROR_CODE:-RESULT_NO_QUALIFIED_IP}"
         msg="${CFST_ERROR_MESSAGE:-没有符合条件的测速结果}"
         runner_fail "$code" "$msg" "$result_status"

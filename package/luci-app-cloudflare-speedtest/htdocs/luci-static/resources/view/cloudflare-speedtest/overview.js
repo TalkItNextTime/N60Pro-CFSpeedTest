@@ -654,7 +654,8 @@ function buildConfigMap(view, summary) {
 	o = s.taboption('speedtest', form.Value, 'download_count', _('下载候选数'));
 	o.ucisection = 'test';
 	o.datatype = 'and(uinteger,min(1),max(50))';
-	o.default = '5';
+	o.default = '10';
+	o.description = _('需要凑够的达标 IP 数量。测速会跳过达不到最低下载速度的 IP 继续尝试，直到凑够该数量或候选耗尽（受任务超时限制）。');
 
 	o = s.taboption('speedtest', form.Value, 'download_seconds', _('单节点下载时间（秒）'));
 	o.ucisection = 'test';

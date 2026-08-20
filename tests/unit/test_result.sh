@@ -73,6 +73,30 @@ assert_eq "$selected" '{"ip":"104.18.4.4","latency_ms":40,"loss_ratio":0,"speed_
 selected="$(select_best_result "$TMP/bom.csv" 200 0.2 0.01)"
 assert_eq "$selected" '{"ip":"104.18.2.10","latency_ms":38.1,"loss_ratio":0,"speed_mbps":373.6,"colo":"HKG"}'
 
+# The fastest row must win even when it sorts last lexicographically. Field
+# ranking cannot rely on `sort -t, -k...`: BusyBox on some OpenWrt builds
+# ignores those flags and falls back to whole-line order.
+cat > "$TMP/rank.csv" <<'EOF'
+IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码
+104.20.5.6,10,10,0.00,3.79,2.61,FRA
+104.25.120.184,10,10,0.00,4.94,1.03,FRA
+162.159.145.165,10,10,0.00,5.44,0.35,FRA
+172.67.242.80,10,10,0.00,5.13,1.02,AMS
+198.41.200.158,10,10,0.00,5.32,9.08,LAX
+EOF
+selected="$(select_best_result "$TMP/rank.csv" 200 0.3 1)"
+assert_eq "$selected" '{"ip":"198.41.200.158","latency_ms":5.32,"loss_ratio":0,"speed_mbps":72.64,"colo":"LAX"}'
+
+# Equal speed falls back to latency asc, then loss asc.
+cat > "$TMP/tiebreak.csv" <<'EOF'
+IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码
+104.20.1.1,10,10,0.00,40.0,5.00,FRA
+104.20.1.2,10,9,0.10,20.0,5.00,LAX
+104.20.1.3,10,10,0.00,20.0,5.00,NRT
+EOF
+selected="$(select_best_result "$TMP/tiebreak.csv" 200 0.3 1)"
+assert_eq "$selected" '{"ip":"104.20.1.3","latency_ms":20,"loss_ratio":0,"speed_mbps":40,"colo":"NRT"}'
+
 set +e
 select_best_result "$FIXTURES/no-qualified.csv" 200 0.2 1 >/dev/null
 status="$?"
@@ -86,3 +110,20 @@ status="$?"
 set -e
 assert_eq "$status" "50"
 assert_eq "$CFST_ERROR_CODE" "RESULT_BAD_CSV"
+
+# --- result_reject_summary: names the gate that emptied the set ---
+# All download speeds zero: the latency/loss gate passes, min-speed rejects.
+cat > "$TMP/zero-speed.csv" <<'EOF'
+IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码
+104.18.4.4,10,10,0.00,45.32,0.00,HKG
+104.18.5.5,10,10,0.00,52.10,0.00,N/A
+EOF
+summary="$(result_reject_summary "$TMP/zero-speed.csv" 200 0.3 1)"
+assert_eq "$summary" 'rows=2 malformed=0 nonpublic=0 loss_rejected=0 latency_rejected=0 latency_loss_ok=2 max_speed_mbps=0.000 required_mbps=1'
+
+# Mixed rejects: each gate is counted separately so the log names the culprit.
+summary="$(result_reject_summary "$FIXTURES/no-qualified.csv" 200 0.2 1)"
+assert_eq "$summary" 'rows=4 malformed=0 nonpublic=1 loss_rejected=1 latency_rejected=1 latency_loss_ok=1 max_speed_mbps=0.004 required_mbps=1'
+
+summary="$(result_reject_summary "$TMP/missing.csv" 200 0.2 1)"
+assert_eq "$summary" 'rows=0 csv=missing'

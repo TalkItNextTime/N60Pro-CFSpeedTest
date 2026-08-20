@@ -20,7 +20,7 @@ load_config
 assert_eq "$CFST_ENABLED" "1"
 assert_eq "$CFST_INTERVAL_HOURS" "6"
 assert_eq "$CFST_THREADS" "50"
-assert_eq "$CFST_DOWNLOAD_COUNT" "5"
+assert_eq "$CFST_DOWNLOAD_COUNT" "10"
 assert_eq "$CFST_TEST_URL" "https://speed.cloudflare.com/__down?bytes=99000000"
 assert_eq "$CFST_MIN_SPEED_MBPS" "0.01"
 assert_eq "$CFST_NAMING_TEMPLATE" "cf"
