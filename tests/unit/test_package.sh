@@ -141,4 +141,21 @@ done < "$IP_TXT"
 grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' "$IP_TXT" >/dev/null \
     || fail 'ip.txt must contain at least one IPv4 CIDR'
 
+# --- luci.mk copies root/ verbatim, so the rpcd plugin needs its exec bit in git ---
+# rpcd silently refuses to load a non-executable plugin, which takes the whole
+# dashboard down. Check the index mode: working-tree bits are unreliable on
+# hosts with core.fileMode=false.
+RPCD_PLUGIN='package/luci-app-cloudflare-speedtest/root/usr/libexec/rpcd/cloudflare-speedtest'
+if command -v git >/dev/null 2>&1 && [ -d "$CFST_ROOT/.git" ]; then
+    mode="$(cd "$CFST_ROOT" && git ls-files -s "$RPCD_PLUGIN" | awk '{print $1}')"
+    assert_eq "$mode" "100755"
+    for data_file in \
+        'package/luci-app-cloudflare-speedtest/root/usr/share/rpcd/acl.d/luci-app-cloudflare-speedtest.json' \
+        'package/luci-app-cloudflare-speedtest/root/usr/share/luci/menu.d/luci-app-cloudflare-speedtest.json'
+    do
+        mode="$(cd "$CFST_ROOT" && git ls-files -s "$data_file" | awk '{print $1}')"
+        assert_eq "$mode" "100644"
+    done
+fi
+
 printf 'OK test_package\n'
