@@ -81,7 +81,9 @@ uid 运行时用 `id -u cfst` 取。`direct_disable` 删整张表，并在 runne
 
 节点归属由 `region / isp / asn` 改为 colo 代码加中文全称，例如 `FRA / 德国 法兰克福`。现在显示的是 Cloudflare 任播地址的注册地，与实际落地机房无关，属于误导。colo 为空或 `N/A` 时显示未知；表里查不到的代码原样显示。
 
-映射表按现有 `cities.tsv`、`providers.tsv` 的惯例放 `/usr/share/cloudflare-speedtest/colos.tsv`，两列为代码与中文名。表是常见机房的整理集合而非 Cloudflare 全量列表，未收录的走原样回退。查表在 rpcd 的 `result` 方法内完成并附加 `colo_name` 字段，前端不读文件。
+映射表按现有 `cities.tsv`、`providers.tsv` 的惯例放 `/usr/share/cloudflare-speedtest/colos.tsv`，两列为代码与中文名。表是常见机房的整理集合而非 Cloudflare 全量列表，未收录的走原样回退。
+
+查表在测速阶段完成：runner 组装 `last_tested` / `last_published` 时顺手写入 `colo_name` 字段。rpcd 的 `result` 方法保持原样直出 state 文件，前端不读文件。升级后旧 state 里没有 `colo_name`，前端回退显示原始 colo 代码。
 
 ## 四、测试
 
