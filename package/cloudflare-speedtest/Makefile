@@ -86,5 +86,19 @@ define Package/cloudflare-speedtest/install
 	$(INSTALL_BIN) ./files/etc/uci-defaults/90-cloudflare-speedtest $(1)/etc/uci-defaults/90-cloudflare-speedtest
 endef
 
+# The speed test runs as this account so nftables can match its traffic by uid.
+# Image builds must not touch the host's /etc, hence the IPKG_INSTROOT guard.
+define Package/cloudflare-speedtest/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+if ! grep -q '^cfst:' /etc/passwd; then
+	echo 'cfst:x:6520:6520:cfst:/var:/bin/false' >> /etc/passwd
+fi
+if ! grep -q '^cfst:' /etc/group; then
+	echo 'cfst:x:6520:' >> /etc/group
+fi
+exit 0
+endef
+
 $(eval $(call GoPackage))
 $(eval $(call BuildPackage,cloudflare-speedtest))

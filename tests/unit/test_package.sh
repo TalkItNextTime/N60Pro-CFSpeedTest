@@ -158,4 +158,13 @@ if command -v git >/dev/null 2>&1 && [ -d "$CFST_ROOT/.git" ]; then
     done
 fi
 
+# --- the dedicated speed test user must be created on install ---
+# direct.sh matches this uid in nftables; without the account cfst keeps
+# running as root and the direct path silently stops working.
+assert_contains "$mk_content" 'define Package/cloudflare-speedtest/postinst'
+assert_contains "$mk_content" 'cfst:x:6520:6520'
+assert_contains "$mk_content" 'cfst:x:6520:'
+assert_contains "$mk_content" '/etc/passwd'
+assert_contains "$mk_content" '/etc/group'
+
 printf 'OK test_package\n'
