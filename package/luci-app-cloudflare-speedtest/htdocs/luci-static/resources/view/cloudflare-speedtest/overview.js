@@ -173,6 +173,26 @@ function formatGeo(obj) {
 	return parts.length ? parts.join(' / ') : _('\u672a\u67e5\u8be2');
 }
 
+/* Node ownership comes from the colo the download actually landed in. The
+ * ipinfo region of an anycast address is a registration address and does not
+ * describe the datacenter, so it must not be used here. colo_name is written
+ * into state at test time; state files from older versions lack it. */
+function formatColo(obj) {
+	if (!obj || typeof obj !== 'object')
+		return _('未知');
+	var code = String(obj.colo || '').trim();
+	if (code === '' || code === 'N/A')
+		return _('未知');
+	var name = String(obj.colo_name || '').trim();
+	return name ? code + ' / ' + name : code;
+}
+
+function fmtNodeTime(v) {
+	if (v === null || v === undefined || v === '')
+		return '—';
+	return fmtDateTime(v);
+}
+
 function formatLocalGeo(obj) {
 	if (!obj || typeof obj !== 'object')
 		return _('\u672a\u67e5\u8be2');
@@ -250,6 +270,10 @@ function renderStatusCards(status, result, summary) {
 			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-last-tested-ip' }, fmtObjectField(tested, 'ip'))
 		]),
 		E('div', { 'class': 'cbi-value' }, [
+			E('label', { 'class': 'cbi-value-title' }, _('最近测速时间')),
+			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-last-tested-at' }, fmtNodeTime(tested.tested_at))
+		]),
+		E('div', { 'class': 'cbi-value' }, [
 			E('label', { 'class': 'cbi-value-title' }, _('延迟 / 速度')),
 			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-last-tested-metrics' },
 				fmtObjectField(tested, 'latency_ms') + ' ms / ' + fmtObjectField(tested, 'speed_mbps') + ' Mbps')
@@ -259,8 +283,12 @@ function renderStatusCards(status, result, summary) {
 			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-last-published-ip' }, fmtObjectField(published, 'ip'))
 		]),
 		E('div', { 'class': 'cbi-value' }, [
+			E('label', { 'class': 'cbi-value-title' }, _('最近发布时间')),
+			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-last-published-at' }, fmtNodeTime(published.published_at))
+		]),
+		E('div', { 'class': 'cbi-value' }, [
 			E('label', { 'class': 'cbi-value-title' }, _('\u4f18\u9009\u8282\u70b9\u5f52\u5c5e')),
-			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-preferred-geo' }, formatGeo(preferred))
+			E('div', { 'class': 'cbi-value-field', 'id': 'cfst-preferred-geo' }, formatColo(preferred))
 		]),
 		E('p', { 'class': 'cbi-value-description' },
 			_('last_tested 为最近一次测速结果；last_published 为已写入 DNS 的结果，二者可能不同。'))
@@ -328,11 +356,13 @@ function updateCardDom(status, result, summary) {
 	setText('cfst-message', fmtValue(status.message, _('空闲')));
 	setText('cfst-next-run', formatNextRun(status, summary));
 	setText('cfst-last-tested-ip', fmtObjectField(tested, 'ip'));
+	setText('cfst-last-tested-at', fmtNodeTime(tested.tested_at));
 	setText('cfst-last-tested-metrics',
 		fmtObjectField(tested, 'latency_ms') + ' ms / ' + fmtObjectField(tested, 'speed_mbps') + ' Mbps');
 	setText('cfst-last-published-ip', fmtObjectField(published, 'ip'));
-	var preferredNode = published.region || published.city || published.isp ? published : tested;
-	setText('cfst-preferred-geo', formatGeo(preferredNode));
+	setText('cfst-last-published-at', fmtNodeTime(published.published_at));
+	var preferredNode = published.colo ? published : tested;
+	setText('cfst-preferred-geo', formatColo(preferredNode));
 	setText('cfst-geo', formatLocalGeo(localNetwork));
 	setText('cfst-managed', fmtObjectField(managed, 'name') || fmtObjectField(published, 'hostname') || '—');
 	setText('cfst-token-state', summary.token_configured ? _('已配置') : _('未配置'));

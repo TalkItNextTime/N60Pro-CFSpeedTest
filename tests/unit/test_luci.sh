@@ -202,4 +202,15 @@ assert_contains "$mk" '+cloudflare-speedtest'
 assert_contains "$mk" 'LUCI_TITLE'
 assert_contains "$mk" 'LUCI_DEPENDS'
 
+# 优选节点 block must expose both timestamps and a colo-based ownership field.
+assert_contains "$js" 'cfst-last-tested-at'
+assert_contains "$js" 'cfst-last-published-at'
+assert_contains "$js" '最近测速时间'
+assert_contains "$js" '最近发布时间'
+assert_contains "$js" 'function formatColo'
+# The anycast registration address is misleading, so formatGeo must no longer
+# drive the node ownership field.
+printf '%s\n' "$js" | grep -F "formatGeo(preferredNode)" >/dev/null \
+	&& fail 'node ownership must use formatColo, not formatGeo'
+
 printf 'OK: luci dashboard contracts\n'
