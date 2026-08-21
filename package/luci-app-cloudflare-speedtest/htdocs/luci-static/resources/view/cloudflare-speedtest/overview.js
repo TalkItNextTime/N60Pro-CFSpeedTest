@@ -157,22 +157,6 @@ function formatNextRun(status, summary) {
 	return fmtDateTime(status.next_run_at || status.next_run || summary.next_run_at);
 }
 
-function formatGeo(obj) {
-	if (!obj || typeof obj !== 'object')
-		return _('\u672a\u67e5\u8be2');
-	var region = obj.region || '';
-	var city = obj.city || '';
-	var isp = obj.isp || '';
-	var asn = obj.asn || '';
-	if (region)
-		return region + (isp ? ' / ' + isp : '') + (asn ? ' / ' + asn : '');
-	var parts = [];
-	if (city) parts.push(city);
-	if (isp) parts.push(isp);
-	if (asn) parts.push(asn);
-	return parts.length ? parts.join(' / ') : _('\u672a\u67e5\u8be2');
-}
-
 /* Node ownership comes from the colo the download actually landed in. The
  * ipinfo region of an anycast address is a registration address and does not
  * describe the datacenter, so it must not be used here. colo_name is written
