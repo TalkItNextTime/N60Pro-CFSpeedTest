@@ -111,6 +111,38 @@ set -e
 assert_eq "$status" "50"
 assert_eq "$CFST_ERROR_CODE" "RESULT_BAD_CSV"
 
+# --- select_best_result: published-IP stickiness ---
+cat > "$TMP/sticky.csv" <<'EOF'
+IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码
+104.20.1.1,10,10,0.00,40.0,5.00,LAX
+104.20.1.2,10,10,0.00,45.0,4.20,FRA
+104.20.1.3,10,10,0.00,50.0,4.16,AMS
+EOF
+
+# No sticky IP given: the fastest wins, exactly as before.
+selected="$(select_best_result "$TMP/sticky.csv" 200 0.3 1)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"ip":"\([^"]*\)".*/\1/p')" '104.20.1.1'
+
+# 5.00 vs 4.20 is +19.05%, below the 20% bar, so the published IP is kept.
+selected="$(select_best_result "$TMP/sticky.csv" 200 0.3 1 104.20.1.2 20)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"ip":"\([^"]*\)".*/\1/p')" '104.20.1.2'
+
+# 5.00 vs 4.16 is +20.19%, above the bar, so the faster IP takes over.
+selected="$(select_best_result "$TMP/sticky.csv" 200 0.3 1 104.20.1.3 20)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"ip":"\([^"]*\)".*/\1/p')" '104.20.1.1'
+
+# margin 0 always takes the fastest.
+selected="$(select_best_result "$TMP/sticky.csv" 200 0.3 1 104.20.1.2 0)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"ip":"\([^"]*\)".*/\1/p')" '104.20.1.1'
+
+# A sticky IP that is not in the qualified set is ignored.
+selected="$(select_best_result "$TMP/sticky.csv" 200 0.3 1 203.0.113.9 20)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"ip":"\([^"]*\)".*/\1/p')" '104.20.1.1'
+
+# The sticky winner keeps its own metrics, not the fastest row's.
+selected="$(select_best_result "$TMP/sticky.csv" 200 0.3 1 104.20.1.2 20)"
+assert_eq "$selected" '{"ip":"104.20.1.2","latency_ms":45,"loss_ratio":0,"speed_mbps":33.6,"colo":"FRA"}'
+
 # --- result_reject_summary: names the gate that emptied the set ---
 # All download speeds zero: the latency/loss gate passes, min-speed rejects.
 cat > "$TMP/zero-speed.csv" <<'EOF'

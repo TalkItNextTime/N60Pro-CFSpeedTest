@@ -228,14 +228,18 @@ result_reject_summary() {
     ' "$file"
 }
 
-# select_best_result FILE MAX_LATENCY MAX_LOSS MIN_SPEED
-# Prints one compact JSON object for the best qualified candidate.
+# select_best_result FILE MAX_LATENCY MAX_LOSS MIN_SPEED [STICKY_IP] [MARGIN_PCT]
+# Prints one compact JSON object for the best qualified candidate. When
+# STICKY_IP is qualified it is retained unless another candidate exceeds it by
+# more than MARGIN_PCT percent.
 # Exit 50 RESULT_BAD_CSV or 51 RESULT_NO_QUALIFIED_IP on failure.
 select_best_result() {
     file="$1"
     max_latency="$2"
     max_loss="$3"
     min_speed="$4"
+    sticky_ip="${5:-}"
+    margin_pct="${6:-0}"
 
     CFST_ERROR_CODE=''
     CFST_ERROR_MESSAGE=''
@@ -252,7 +256,8 @@ select_best_result() {
     # Ranking happens here rather than via sort: BusyBox sort on some OpenWrt
     # builds silently ignores -t/-k and falls back to whole-line lexicographic
     # order, which picked the lowest-numbered IP instead of the fastest.
-    best="$(awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" -v min_speed_mbps="$min_speed" "
+    best="$(awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" -v min_speed_mbps="$min_speed" \
+        -v sticky_ip="$sticky_ip" -v margin_pct="$margin_pct" "
         function is_num(v) { return v ~ /^[0-9]+([.][0-9]+)?\$/ }
         $_CFST_AWK_IS_PUBLIC_IPV4"'
         NR == 1 { next }
@@ -287,9 +292,25 @@ select_best_result() {
                 best_speed = speed
                 best_colo = colo
             }
+            if (sticky_ip != "" && ip == sticky_ip) {
+                sticky_found = 1
+                sticky_loss = loss
+                sticky_latency = latency
+                sticky_speed = speed
+                sticky_colo = colo
+            }
         }
         END {
-            if (best_ip != "") printf "%s,%s,%s,%s,%s\n", best_ip, best_loss, best_latency, best_speed, best_colo
+            if (best_ip == "") exit
+            # Keep the currently published IP unless a candidate is faster by
+            # more than the configured margin. Speed measurements carry enough
+            # noise that always taking the maximum churns the DNS record.
+            if (sticky_found && best_ip != sticky_ip &&
+                best_speed + 0 <= (sticky_speed + 0) * (1 + (margin_pct + 0) / 100)) {
+                printf "%s,%s,%s,%s,%s\n", sticky_ip, sticky_loss, sticky_latency, sticky_speed, sticky_colo
+            } else {
+                printf "%s,%s,%s,%s,%s\n", best_ip, best_loss, best_latency, best_speed, best_colo
+            }
         }
     ' "$file")"
 
