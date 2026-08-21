@@ -159,3 +159,30 @@ assert_eq "$summary" 'rows=4 malformed=0 nonpublic=1 loss_rejected=1 latency_rej
 
 summary="$(result_reject_summary "$TMP/missing.csv" 200 0.2 1)"
 assert_eq "$summary" 'rows=0 csv=missing'
+
+# --- result_merge_csv: one header, deduped by IP keeping the faster row ---
+cat > "$TMP/merge-main.csv" <<'EOF'
+IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码
+104.20.2.1,10,10,0.00,40.0,5.00,LAX
+104.20.2.2,10,10,0.00,45.0,1.00,FRA
+EOF
+cat > "$TMP/merge-recheck.csv" <<'EOF'
+IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码
+104.20.2.2,10,10,0.00,44.0,9.00,FRA
+104.20.2.9,10,10,0.00,60.0,2.00,AMS
+EOF
+result_merge_csv "$TMP/merged.csv" "$TMP/merge-main.csv" "$TMP/merge-recheck.csv"
+assert_eq "$(awk 'END { print NR }' "$TMP/merged.csv")" '4'
+assert_eq "$(awk 'NR==1' "$TMP/merged.csv")" 'IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码'
+# 104.20.2.2 appears once, with the faster recheck row
+assert_eq "$(grep -c '^104\.20\.2\.2,' "$TMP/merged.csv")" '1'
+assert_contains "$(cat "$TMP/merged.csv")" '104.20.2.2,10,10,0.00,44.0,9.00,FRA'
+assert_contains "$(cat "$TMP/merged.csv")" '104.20.2.9,10,10,0.00,60.0,2.00,AMS'
+
+# A missing or empty second input degrades to a copy of the first.
+result_merge_csv "$TMP/merged2.csv" "$TMP/merge-main.csv" "$TMP/does-not-exist.csv"
+assert_eq "$(awk 'END { print NR }' "$TMP/merged2.csv")" '3'
+
+# Selection over the merged file sees the recheck row.
+selected="$(select_best_result "$TMP/merged.csv" 200 0.3 1)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"ip":"\([^"]*\)".*/\1/p')" '104.20.2.2'

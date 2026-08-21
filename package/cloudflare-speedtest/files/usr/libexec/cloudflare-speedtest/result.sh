@@ -228,6 +228,29 @@ result_reject_summary() {
     ' "$file"
 }
 
+# result_merge_csv OUT FIRST [SECOND ...]
+# Writes one CSV_HEADER line followed by the data rows of every readable input,
+# deduplicated by IP keeping the row with the highest speed. Missing or empty
+# inputs are skipped. Always exits 0 as long as OUT could be written.
+result_merge_csv() {
+    out="$1"
+    shift
+    printf '%s\n' "$CFST_CSV_HEADER" > "$out" || return 1
+    for source_file in "$@"; do
+        [ -s "$source_file" ] || continue
+        awk -F, 'NR > 1 { sub(/\r$/, "", $0); if (NF == 7 && $1 != "") print }' "$source_file"
+    done | awk -F, '
+        {
+            if (!($1 in best) || $6 + 0 > speed[$1] + 0) {
+                best[$1] = $0
+                speed[$1] = $6
+                if (!($1 in seen)) { order[++n] = $1; seen[$1] = 1 }
+            }
+        }
+        END { for (i = 1; i <= n; i++) print best[order[i]] }
+    ' >> "$out"
+}
+
 # select_best_result FILE MAX_LATENCY MAX_LOSS MIN_SPEED [STICKY_IP] [MARGIN_PCT]
 # Prints one compact JSON object for the best qualified candidate. When
 # STICKY_IP is qualified it is retained unless another candidate exceeds it by
