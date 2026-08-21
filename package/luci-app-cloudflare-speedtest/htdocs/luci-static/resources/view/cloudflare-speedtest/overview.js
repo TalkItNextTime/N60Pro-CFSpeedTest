@@ -729,6 +729,17 @@ function buildConfigMap(view, summary) {
 	o.default = '0';
 	o.description = _('忽略随机候选数量，测试来源中的全部 IP。');
 
+	o = s.taboption('speedtest', form.Flag, 'direct_mode', _('测速走直连'));
+	o.ucisection = 'test';
+	o.default = '1';
+	o.description = _('给测速进程的流量打 0xff 标记，绕过 passwall2 等透明代理。关闭后延迟测的是本地代理的响应时间，结果不可信。');
+
+	o = s.taboption('speedtest', form.Value, 'publish_switch_margin', _('切换阈值（%）'));
+	o.ucisection = 'test';
+	o.datatype = 'and(uinteger,min(0),max(100))';
+	o.default = '20';
+	o.description = _('已发布 IP 复测仍合格时，新 IP 速度需高出该百分比才替换，用于减少 DNS 抖动。0 表示总是取最快。');
+
 	o = bindPreferredOption(s.taboption('speedtest', form.ListValue, 'provider', _('优选反代提供商')));
 	o.value('auto', _('自动根据本地运营商选择'));
 	o.value('ct', _('电信'));

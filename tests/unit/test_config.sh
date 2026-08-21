@@ -27,6 +27,8 @@ assert_eq "$CFST_NAMING_TEMPLATE" "cf"
 assert_eq "$CFST_IP_SOURCE" "cidr"
 assert_eq "$CFST_CANDIDATE_COUNT" "0"
 assert_eq "$CFST_TEST_ALL" "0"
+assert_eq "$CFST_DIRECT_MODE" "1"
+assert_eq "$CFST_PUBLISH_SWITCH_MARGIN" "20"
 
 set +e
 validate_publish_config
@@ -72,6 +74,26 @@ status="$?"
 set -e
 assert_eq "$status" "21"
 assert_eq "$CFST_ERROR_CODE" "CONFIG_LOSS_INVALID"
+
+: > "$CFST_TEST_UCI_FILE"
+printf '%s\n' 'cloudflare-speedtest.test.direct_mode=2' >> "$CFST_TEST_UCI_FILE"
+load_config
+set +e
+validate_base_config
+status="$?"
+set -e
+assert_eq "$status" "21"
+assert_eq "$CFST_ERROR_CODE" "CONFIG_DIRECT_MODE_INVALID"
+
+: > "$CFST_TEST_UCI_FILE"
+printf '%s\n' 'cloudflare-speedtest.test.publish_switch_margin=101' >> "$CFST_TEST_UCI_FILE"
+load_config
+set +e
+validate_base_config
+status="$?"
+set -e
+assert_eq "$status" "21"
+assert_eq "$CFST_ERROR_CODE" "CONFIG_SWITCH_MARGIN_INVALID"
 
 cat > "$CFST_TEST_UCI_FILE" <<'EOF'
 cloudflare-speedtest.cloudflare.api_token=test-token

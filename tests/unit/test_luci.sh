@@ -213,4 +213,8 @@ assert_contains "$js" 'function formatColo'
 printf '%s\n' "$js" | grep -F "formatGeo(preferredNode)" >/dev/null \
 	&& fail 'node ownership must use formatColo, not formatGeo'
 
+assert_contains "$js" "'direct_mode'"
+assert_contains "$js" "'publish_switch_margin'"
+assert_contains "$js" 'and(uinteger,min(0),max(100))'
+
 printf 'OK: luci dashboard contracts\n'

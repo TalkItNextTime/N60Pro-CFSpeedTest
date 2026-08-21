@@ -64,6 +64,8 @@ ensure_option test ip_file '/usr/share/cloudflare-speedtest/ip.txt'
 ensure_option test ip_source cidr
 ensure_option test candidate_count 0
 ensure_option test test_all 0
+ensure_option test direct_mode 1
+ensure_option test publish_switch_margin 20
 
 ensure_section geo geo
 ensure_option geo request_timeout 8

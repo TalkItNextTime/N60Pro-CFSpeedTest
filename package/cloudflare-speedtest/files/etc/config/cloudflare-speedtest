@@ -33,6 +33,8 @@ config test 'test'
         option ip_source 'cidr'
         option candidate_count '0'
         option test_all '0'
+        option direct_mode '1'
+        option publish_switch_margin '20'
 
 config geo 'geo'
         option request_timeout '8'
