@@ -1,0 +1,11 @@
+#!/bin/sh
+# Host-test mock for nft. Records argv and obeys a scripted exit code.
+set -eu
+log_file="${CFST_MOCK_NFT_LOG:-}"
+if [ -n "$log_file" ]; then
+    { printf 'argv:'; for arg in "$@"; do printf ' %s' "$arg"; done; printf '\n'; } >> "$log_file"
+fi
+if [ -n "${CFST_MOCK_NFT_LIST_OUTPUT:-}" ] && [ "${1:-}" = "list" ]; then
+    printf '%s\n' "$CFST_MOCK_NFT_LIST_OUTPUT"
+fi
+exit "${CFST_MOCK_NFT_EXIT:-0}"
