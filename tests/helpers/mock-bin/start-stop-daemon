@@ -1,0 +1,18 @@
+#!/bin/sh
+# Host-test mock for start-stop-daemon. Records argv, then execs the -x program
+# with everything after the -- separator.
+set -eu
+log_file="${CFST_MOCK_SSD_LOG:-}"
+if [ -n "$log_file" ]; then
+    { printf 'argv:'; for arg in "$@"; do printf ' %s' "$arg"; done; printf '\n'; } >> "$log_file"
+fi
+program=''
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -x) program="$2"; shift 2 ;;
+        --) shift; break ;;
+        *) shift ;;
+    esac
+done
+[ -n "$program" ] || exit 2
+exec "$program" "$@"

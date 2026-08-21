@@ -318,6 +318,13 @@ reset_env() {
     export CFST_TEST_UCI_FILE="$TMP/uci"
     export CFST_MOCK_CFST_LOG="$TMP/cfst.args"
     export CFST_MOCK_CFST_FIXTURE="$FIXTURES_R/valid.csv"
+    export CFST_MOCK_NFT_LOG="$TMP/nft.args"
+    export CFST_MOCK_SSD_LOG="$TMP/ssd.args"
+    : > "$TMP/nft.args"
+    : > "$TMP/ssd.args"
+    export CFST_DIRECT_USER=nobody
+    # Git Bash has no nobody account, so hand direct.sh the uid directly.
+    export CFST_DIRECT_UID=65534
     unset CFST_MOCK_CFST_SLEEP CFST_MOCK_CFST_EXIT CFST_MOCK_CFST_REAL_SLEEP
     unset CFST_TASK_TIMEOUT_OVERRIDE CFST_STOP_GRACE_SECONDS
     export CFST_DISABLE_WATCHDOG=1
@@ -471,6 +478,41 @@ set -e
 assert_eq "$status" "30"
 # cleanup fake lock for later tests
 rm -rf "$CFST_LOCK_DIR"
+
+# --- direct mode: rule installed before testing, removed after, cfst dropped
+#     to the dedicated user, and the previous IPs are rechecked first ---
+reset_env
+printf '%s\n' 'cloudflare-speedtest.test.direct_mode=1' >> "$CFST_TEST_UCI_FILE"
+cat > "$CFST_STATE_FILE" <<'EOF'
+{"schema_version":1,"last_published":{"ip":"104.18.2.10","published_at":1700000000},"last_tested":{"ip":"104.18.1.1","tested_at":1700000000},"geo_cache":null,"managed_record":null,"network_cache":null}
+EOF
+set +e
+run_cli run --mode test-only --trigger manual
+status="$?"
+set -e
+assert_eq "$status" "0"
+nft_args="$(tr -d '\r' < "$TMP/nft.args")"
+assert_contains "$nft_args" 'add table inet cfst_direct'
+assert_contains "$nft_args" 'delete table inet cfst_direct'
+assert_contains "$(tr -d '\r' < "$TMP/ssd.args")" '-c nobody'
+log_text="$(tr -d '\r' < "$CFST_LOG_FILE")"
+assert_contains "$log_text" 'recheck candidates=2'
+# The recheck must run before the main pass.
+recheck_line="$(grep -n 'recheck candidates=' "$CFST_LOG_FILE" | head -1 | cut -d: -f1)"
+testing_line="$(grep -n 'phase=testing$' "$CFST_LOG_FILE" | head -1 | cut -d: -f1)"
+[ "$recheck_line" -gt "$testing_line" ] || fail 'recheck must be logged inside the testing phase'
+assert_contains "$log_text" 'select sticky'
+
+# --- direct mode off: no nftables calls, cfst stays root ---
+reset_env
+printf '%s\n' 'cloudflare-speedtest.test.direct_mode=0' >> "$CFST_TEST_UCI_FILE"
+set +e
+run_cli run --mode test-only --trigger manual
+status="$?"
+set -e
+assert_eq "$status" "0"
+assert_eq "$(wc -c < "$TMP/nft.args" | tr -d ' ')" '0'
+assert_eq "$(wc -c < "$TMP/ssd.args" | tr -d ' ')" '0'
 
 # --- no qualified result ---
 reset_env

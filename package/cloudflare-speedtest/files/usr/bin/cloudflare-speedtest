@@ -41,6 +41,8 @@ cfst_source_runner() {
     # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/colo.sh"
     # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/direct.sh"
+    # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/dns.sh"
     # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/runner.sh"

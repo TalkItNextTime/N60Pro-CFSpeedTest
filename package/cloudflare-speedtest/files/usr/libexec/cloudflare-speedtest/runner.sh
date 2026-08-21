@@ -34,6 +34,8 @@ runner_source_libs() {
     # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/colo.sh"
     # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/direct.sh"
+    # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/dns.sh"
 }
 
@@ -56,6 +58,7 @@ runner_json_field() {
 }
 
 runner_cleanup() {
+    direct_disable 2>/dev/null || true
     if [ -n "${CFST_WATCHDOG_PID:-}" ]; then
         kill "$CFST_WATCHDOG_PID" 2>/dev/null || true
         wait "$CFST_WATCHDOG_PID" 2>/dev/null || true
@@ -159,24 +162,41 @@ runner_run_cfst() {
     fi
 
     # Keep the arguments discrete. The option strings above are controlled by
-    # validated internal flags, not user input.
+    # validated internal flags, not user input. Only the launcher varies: when
+    # direct mode is active cfst runs as a dedicated uid so nftables can match
+    # its sockets. The router has no su/setpriv, so start-stop-daemon is the
+    # available way to drop privileges; it execs in the foreground, keeping the
+    # existing background-and-wait structure intact.
+    launcher=''
+    launcher_sep=''
+    run_user="$(direct_run_user)"
+    if [ -n "$run_user" ]; then
+        chown "$run_user" "$prepared_ip" 2>/dev/null || true
+        chown "$run_user" "${CFST_TASK_DIR:-/tmp}" 2>/dev/null || true
+        launcher="start-stop-daemon -S -c $run_user -x"
+        # start-stop-daemon needs -- before the program's own options, but cfst
+        # must not receive a bare -- when it is launched directly.
+        launcher_sep='--'
+    fi
+
+    # shellcheck disable=SC2086
     if [ "$latency_only" = "1" ] && [ -n "$allip_arg" ]; then
-        "$CFST_CFST_BIN" -f "$prepared_ip" -o "$out_file" -p 0 \
+        $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
             -tlr "$max_loss" -url "$test_url" -dd -allip &
     elif [ "$latency_only" = "1" ]; then
-        "$CFST_CFST_BIN" -f "$prepared_ip" -o "$out_file" -p 0 \
+        $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
             -tlr "$max_loss" -url "$test_url" -dd &
     elif [ -n "$allip_arg" ]; then
-        "$CFST_CFST_BIN" -f "$prepared_ip" -o "$out_file" -p 0 \
+        $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
             -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" -allip &
     else
-        "$CFST_CFST_BIN" -f "$prepared_ip" -o "$out_file" -p 0 \
+        $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
             -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" &
@@ -471,6 +491,49 @@ run_task() {
     # --- testing ---
     state_set_phase testing '正在测速'
     cfst_log info 'phase=testing'
+
+    # Marking must cover every cfst invocation in this phase: the recheck, the
+    # latency preflight and the main pass. A transparent proxy would otherwise
+    # answer the handshake locally and every measurement below is fiction.
+    CFST_DIRECT_USER="${CFST_DIRECT_USER:-cfst}"
+    direct_enable
+
+    # Recheck the IPs from the previous round before sampling new candidates. A
+    # still-usable address keeps the task from failing when this round's sample
+    # happens to be bad, and feeds the stickiness comparison later.
+    recheck_out=''
+    recheck_ips="$CFST_TASK_DIR/recheck.txt"
+    : > "$recheck_ips"
+    for previous in "$(runner_json_field "${CFST_LAST_TESTED:-}" ip)" \
+                    "$(runner_json_field "${CFST_LAST_PUBLISHED:-}" ip)"; do
+        [ -n "$previous" ] || continue
+        is_ipv4 "$previous" || continue
+        grep -qx "$previous" "$recheck_ips" 2>/dev/null && continue
+        printf '%s\n' "$previous" >> "$recheck_ips"
+    done
+    if [ -s "$recheck_ips" ]; then
+        recheck_count="$(awk 'END { print NR }' "$recheck_ips")"
+        cfst_log info "recheck candidates=$recheck_count"
+        state_set_phase testing_recheck "正在复测上轮 IP（$recheck_count）"
+        recheck_out="$CFST_TASK_DIR/recheck.csv"
+        saved_download_count="$CFST_DOWNLOAD_COUNT"
+        CFST_DOWNLOAD_COUNT="$recheck_count"
+        set +e
+        runner_run_cfst "$recheck_ips" "$recheck_out" 0
+        recheck_status=$?
+        set -e
+        CFST_DOWNLOAD_COUNT="$saved_download_count"
+        if [ "$recheck_status" -eq 130 ] || [ "${CFST_CANCELLED:-0}" = "1" ]; then
+            state_write_status cancelled 'Task cancelled'
+            return 130
+        fi
+        # A recheck that finds nothing is normal, not a task failure.
+        if [ "$recheck_status" -ne 0 ] || [ ! -s "$recheck_out" ]; then
+            cfst_log info 'recheck produced no qualified row'
+            recheck_out=''
+        fi
+    fi
+
     ip_source_abs="$(runner_make_absolute "$CFST_IP_FILE")"
     preferred_ip=""
     if [ "${CFST_IP_SOURCE:-cidr}" = "preferred" ]; then
@@ -573,18 +636,26 @@ run_task() {
     fi
 
     # --- validating_result ---
+    direct_disable
     state_set_phase validating_result '正在验证测速结果'
     cfst_log info 'phase=validating_result'
     # Redirect instead of command substitution: select_best_result reports the
     # precise failure through CFST_ERROR_CODE/MESSAGE, which a subshell drops.
     best_file="$CFST_TASK_DIR/best.json"
+    combined_abs="$out_abs"
+    if [ -n "$recheck_out" ]; then
+        combined_abs="$CFST_TASK_DIR/combined.csv"
+        result_merge_csv "$combined_abs" "$out_abs" "$recheck_out"
+    fi
+    sticky_ip="$(runner_json_field "${CFST_LAST_PUBLISHED:-}" ip)"
     set +e
-    select_best_result "$out_abs" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" "$CFST_MIN_SPEED_MBPS" > "$best_file"
+    select_best_result "$combined_abs" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" \
+        "$CFST_MIN_SPEED_MBPS" "$sticky_ip" "${CFST_PUBLISH_SWITCH_MARGIN:-20}" > "$best_file"
     result_status=$?
     set -e
     best="$(cat "$best_file" 2>/dev/null || true)"
     if [ "$result_status" -ne 0 ]; then
-        cfst_log warn "result_reject $(result_reject_summary "$out_abs" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" "$CFST_MIN_SPEED_MBPS") csv=$out_abs"
+        cfst_log warn "result_reject $(result_reject_summary "$combined_abs" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" "$CFST_MIN_SPEED_MBPS") csv=$combined_abs"
         code="${CFST_ERROR_CODE:-RESULT_NO_QUALIFIED_IP}"
         msg="${CFST_ERROR_MESSAGE:-没有符合条件的测速结果}"
         runner_fail "$code" "$msg" "$result_status"
@@ -592,6 +663,11 @@ run_task() {
     fi
 
     selected_ip="$(runner_json_field "$best" ip)"
+    if [ -n "$sticky_ip" ] && [ "$selected_ip" = "$sticky_ip" ]; then
+        cfst_log info "select sticky kept=$sticky_ip margin=${CFST_PUBLISH_SWITCH_MARGIN:-20}"
+    elif [ -n "$sticky_ip" ]; then
+        cfst_log info "select sticky switched from=$sticky_ip to=$selected_ip margin=${CFST_PUBLISH_SWITCH_MARGIN:-20}"
+    fi
     selected_info="$(ipinfo_get_or_query "$selected_ip" 2>/dev/null || true)"
     if [ -z "$selected_info" ]; then
         cfst_log warn "preferred IP info unavailable ip=$selected_ip"
