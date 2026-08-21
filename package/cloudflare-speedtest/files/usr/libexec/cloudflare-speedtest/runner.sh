@@ -36,6 +36,8 @@ runner_source_libs() {
     # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/direct.sh"
     # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/progress.sh"
+    # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/dns.sh"
 }
 
@@ -116,10 +118,43 @@ runner_prepare_ip_file() {
     [ -s "$dest" ]
 }
 
+CFST_PROGRESS_PID=''
+
+# runner_progress_start CAPTURE_FILE
+# Polls cfst's captured progress counter and republishes it as the task status.
+runner_progress_start() {
+    capture="$1"
+    CFST_PROGRESS_PID=''
+    [ "${CFST_PROGRESS_DISABLE:-0}" != "1" ] || return 0
+    [ -n "${CFST_PROGRESS_LABEL:-}" ] || return 0
+    started="$(cfst_now)"
+    (
+        while :; do
+            "${CFST_SLEEP_CMD:-sleep}" "${CFST_PROGRESS_INTERVAL:-3}" || exit 0
+            snapshot="$(progress_snapshot "$capture" 2>/dev/null || true)"
+            [ -n "$snapshot" ] || continue
+            elapsed=$(( $(cfst_now) - started ))
+            state_write_status "${CFST_PROGRESS_PHASE:-testing}" \
+                "$(progress_message "$CFST_PROGRESS_LABEL" "${snapshot% *}" "${snapshot#* }" "$elapsed")" \
+                2>/dev/null || true
+        done
+    ) &
+    CFST_PROGRESS_PID=$!
+}
+
+runner_progress_stop() {
+    [ -n "${CFST_PROGRESS_PID:-}" ] || return 0
+    kill "$CFST_PROGRESS_PID" 2>/dev/null || true
+    wait "$CFST_PROGRESS_PID" 2>/dev/null || true
+    CFST_PROGRESS_PID=''
+}
+
 runner_run_cfst() {
     ip_file="$1"
     out_file="$2"
     latency_only="${3:-0}"
+    progress_log="${CFST_TASK_DIR:-/tmp}/cfst-progress.$$"
+    : > "$progress_log" 2>/dev/null || true
 
     threads="${CFST_THREADS:-50}"
     attempts="${CFST_ATTEMPTS:-4}"
@@ -184,24 +219,29 @@ runner_run_cfst() {
         $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -url "$test_url" -dd -allip &
+            -tlr "$max_loss" -url "$test_url" -dd -allip >"$progress_log" 2>&1 &
     elif [ "$latency_only" = "1" ]; then
         $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -url "$test_url" -dd &
+            -tlr "$max_loss" -url "$test_url" -dd >"$progress_log" 2>&1 &
     elif [ -n "$allip_arg" ]; then
         $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" -allip &
+            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" -allip >"$progress_log" 2>&1 &
     else
         $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" &
+            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" >"$progress_log" 2>&1 &
     fi
     CFST_CHILD_PID=$!
+
+    # Republish cfst's own progress counter as the task status. The poller only
+    # lives for the duration of this child, so it cannot race the phase writes
+    # that bracket it.
+    runner_progress_start "$progress_log"
 
     if [ "${CFST_DISABLE_WATCHDOG:-0}" != "1" ]; then
         (
@@ -215,6 +255,7 @@ runner_run_cfst() {
     wait_status=0
     wait "$CFST_CHILD_PID" || wait_status=$?
     CFST_CHILD_PID=''
+    runner_progress_stop
 
     if [ -n "${CFST_WATCHDOG_PID:-}" ]; then
         kill "$CFST_WATCHDOG_PID" 2>/dev/null || true
@@ -515,6 +556,8 @@ run_task() {
         recheck_count="$(awk 'END { print NR }' "$recheck_ips")"
         cfst_log info "recheck candidates=$recheck_count"
         state_set_phase testing_recheck "正在复测上轮 IP（$recheck_count）"
+        CFST_PROGRESS_PHASE=testing_recheck
+        CFST_PROGRESS_LABEL="正在复测上轮 IP"
         recheck_out="$CFST_TASK_DIR/recheck.csv"
         saved_download_count="$CFST_DOWNLOAD_COUNT"
         CFST_DOWNLOAD_COUNT="$recheck_count"
@@ -584,6 +627,8 @@ run_task() {
             fi
             cfst_log info "latency_preflight candidates=$current_count available=$candidate_available"
             state_set_phase testing_latency "正在测试延迟候选 IP（$current_count）"
+            CFST_PROGRESS_PHASE=testing_latency
+            CFST_PROGRESS_LABEL="正在测试延迟"
             rm -f "$preflight_out"
             set +e
             runner_run_cfst "$candidate_file" "$preflight_out" 1
@@ -613,9 +658,23 @@ run_task() {
             runner_fail RESULT_NO_QUALIFIED_IP '没有符合当前测速条件的结果' 51
             return 51
         fi
-        ip_source_abs="$candidate_file"
+        # Hand the download pass only the addresses the preflight already
+        # cleared. Re-measuring latency for the whole sample was free when a
+        # transparent proxy answered every handshake locally; against real
+        # round trips it doubles the longest phase of the task.
+        survivors="$CFST_TASK_DIR/survivors.txt"
+        if result_qualified_ips "$preflight_out" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" > "$survivors" 2>/dev/null &&
+           [ -s "$survivors" ]; then
+            cfst_log info "latency_preflight survivors=$(awk 'END { print NR }' "$survivors")"
+            ip_source_abs="$survivors"
+        else
+            ip_source_abs="$candidate_file"
+        fi
     fi
 
+    CFST_PROGRESS_PHASE=testing_download
+    CFST_PROGRESS_LABEL="正在下载测速"
+    state_set_phase testing_download '正在下载测速'
     out_abs="$(runner_make_absolute "$CFST_TASK_DIR/result.csv")"
     set +e
     runner_run_cfst "$ip_source_abs" "$out_abs" 0
@@ -650,7 +709,8 @@ run_task() {
     sticky_ip="$(runner_json_field "${CFST_LAST_PUBLISHED:-}" ip)"
     set +e
     select_best_result "$combined_abs" "$CFST_MAX_LATENCY_MS" "$CFST_MAX_LOSS_RATIO" \
-        "$CFST_MIN_SPEED_MBPS" "$sticky_ip" "${CFST_PUBLISH_SWITCH_MARGIN:-20}" > "$best_file"
+        "$CFST_MIN_SPEED_MBPS" "$sticky_ip" "${CFST_PUBLISH_SWITCH_MARGIN:-20}" \
+        "${CFST_SPEED_WEIGHT:-60}" > "$best_file"
     result_status=$?
     set -e
     best="$(cat "$best_file" 2>/dev/null || true)"

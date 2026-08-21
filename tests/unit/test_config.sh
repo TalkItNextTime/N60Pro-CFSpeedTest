@@ -29,6 +29,7 @@ assert_eq "$CFST_CANDIDATE_COUNT" "0"
 assert_eq "$CFST_TEST_ALL" "0"
 assert_eq "$CFST_DIRECT_MODE" "1"
 assert_eq "$CFST_PUBLISH_SWITCH_MARGIN" "20"
+assert_eq "$CFST_SPEED_WEIGHT" "60"
 
 set +e
 validate_publish_config

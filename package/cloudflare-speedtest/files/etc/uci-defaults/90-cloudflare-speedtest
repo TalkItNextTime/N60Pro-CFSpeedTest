@@ -66,6 +66,7 @@ ensure_option test candidate_count 0
 ensure_option test test_all 0
 ensure_option test direct_mode 1
 ensure_option test publish_switch_margin 20
+ensure_option test speed_weight 60
 
 ensure_section geo geo
 ensure_option geo request_timeout 8

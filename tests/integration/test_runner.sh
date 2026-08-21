@@ -578,6 +578,11 @@ log_text="$(tr -d '\r' < "$CFST_LOG_FILE")"
 assert_contains "$log_text" 'latency_preflight candidates=2'
 assert_contains "$log_text" 'latency_preflight no qualified result; expanding candidates=2 next=3'
 assert_contains "$log_text" 'latency_preflight qualified candidates=3'
+# The download pass must run on the preflight survivors, not the whole sample,
+# so the expensive latency phase is not repeated. valid.csv has five rows that
+# clear the latency/loss gate; the -f argument itself is always the sanitised
+# copy, so the survivor count is the observable signal.
+assert_contains "$log_text" 'latency_preflight survivors=5'
 preflight_count="$(grep -c -- ' -dd' "$TMP/cfst.args" || true)"
 assert_eq "$preflight_count" "2"
 last_args="$(tail -n 1 "$TMP/cfst.args")"

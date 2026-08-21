@@ -110,6 +110,7 @@ load_config() {
     CFST_TEST_ALL="$(cfst_config_get test test_all 0)"
     CFST_DIRECT_MODE="$(cfst_config_get test direct_mode 1)"
     CFST_PUBLISH_SWITCH_MARGIN="$(cfst_config_get test publish_switch_margin 20)"
+    CFST_SPEED_WEIGHT="$(cfst_config_get test speed_weight 60)"
 
     CFST_PREFERRED_PROVIDER="$(cfst_config_get preferred provider 'auto')"
     CFST_PREFERRED_URL_CT="$(cfst_config_get preferred url_ct 'https://cf.090227.xyz/ct?ips=20')"
@@ -163,6 +164,7 @@ validate_base_config() {
         *) set_config_error CONFIG_DIRECT_MODE_INVALID '直连测速必须为 0 或 1'; return $? ;;
     esac
     validate_uint_range "$CFST_PUBLISH_SWITCH_MARGIN" 0 100 CONFIG_SWITCH_MARGIN_INVALID '切换阈值必须为 0 到 100' || return $?
+    validate_uint_range "$CFST_SPEED_WEIGHT" 0 100 CONFIG_SPEED_WEIGHT_INVALID '速度权重必须为 0 到 100' || return $?
     case "$CFST_PREFERRED_PROVIDER" in
         auto|ct|cu|cmcc|custom) : ;;
         *) set_config_error CONFIG_PREFERRED_PROVIDER_INVALID '优选反代提供商无效'; return $? ;;

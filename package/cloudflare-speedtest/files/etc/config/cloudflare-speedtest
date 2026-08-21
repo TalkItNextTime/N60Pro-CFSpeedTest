@@ -35,6 +35,7 @@ config test 'test'
         option test_all '0'
         option direct_mode '1'
         option publish_switch_margin '20'
+        option speed_weight '60'
 
 config geo 'geo'
         option request_timeout '8'

@@ -143,6 +143,35 @@ assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"ip":"\([^"]*\)".*/\1/p')" '1
 selected="$(select_best_result "$TMP/sticky.csv" 200 0.3 1 104.20.1.2 20)"
 assert_eq "$selected" '{"ip":"104.20.1.2","latency_ms":45,"loss_ratio":0,"speed_mbps":33.6,"colo":"FRA"}'
 
+# --- select_best_result: speed and latency are scored together ---
+# Real measurements from an N60 Pro run. Raw speed alone picks the LAX node,
+# but it sits three timezones away; the NRT node is only 26% slower and less
+# than a third of the round trip, which is the better node to publish.
+cat > "$TMP/score.csv" <<'EOF'
+IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码
+104.18.1.239,10,10,0.00,167.77,49.82,LAX
+162.159.44.229,10,10,0.00,56.96,36.78,NRT
+104.18.37.255,10,10,0.00,95.04,36.64,SIN
+EOF
+selected="$(select_best_result "$TMP/score.csv" 300 0.3 1)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"colo":"\([^"]*\)".*/\1/p')" 'NRT'
+
+# speed_weight 100 ignores latency entirely and restores raw-speed ranking.
+selected="$(select_best_result "$TMP/score.csv" 300 0.3 1 '' 0 100)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"colo":"\([^"]*\)".*/\1/p')" 'LAX'
+
+# speed_weight 0 ranks purely on latency.
+selected="$(select_best_result "$TMP/score.csv" 300 0.3 1 '' 0 0)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"colo":"\([^"]*\)".*/\1/p')" 'NRT'
+
+# Stickiness compares scores, not raw speed: LAX is published but scores 0.736
+# against NRT's 0.843, which is a 14% gap and under the 20% bar, so it stays.
+selected="$(select_best_result "$TMP/score.csv" 300 0.3 1 104.18.1.239 20)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"colo":"\([^"]*\)".*/\1/p')" 'LAX'
+# With no margin the better-scoring node takes over.
+selected="$(select_best_result "$TMP/score.csv" 300 0.3 1 104.18.1.239 0)"
+assert_eq "$(printf '%s' "$selected" | sed -n 's/.*"colo":"\([^"]*\)".*/\1/p')" 'NRT'
+
 # --- result_reject_summary: names the gate that emptied the set ---
 # All download speeds zero: the latency/loss gate passes, min-speed rejects.
 cat > "$TMP/zero-speed.csv" <<'EOF'
@@ -159,6 +188,23 @@ assert_eq "$summary" 'rows=4 malformed=0 nonpublic=1 loss_rejected=1 latency_rej
 
 summary="$(result_reject_summary "$TMP/missing.csv" 200 0.2 1)"
 assert_eq "$summary" 'rows=0 csv=missing'
+
+# --- result_qualified_ips: narrows the download pass to preflight survivors ---
+cat > "$TMP/preflight.csv" <<'EOF'
+IP 地址,已发送,已接收,丢包率,平均延迟,下载速度(MB/s),地区码
+104.20.3.1,10,10,0.00,40.0,0.00,LAX
+10.0.0.5,10,10,0.00,20.0,0.00,XXX
+104.20.3.2,10,10,0.00,250.0,0.00,FRA
+104.20.3.3,10,4,0.60,50.0,0.00,AMS
+104.20.3.4,10,10,0.00,60.0,0.00,NRT
+104.20.3.1,10,10,0.00,41.0,0.00,LAX
+EOF
+survivors="$(result_qualified_ips "$TMP/preflight.csv" 200 0.3)"
+# private, over-latency, over-loss and the duplicate are all dropped; the CSV
+# order is preserved so the download pass tries the lowest latency first.
+assert_eq "$survivors" '104.20.3.1
+104.20.3.4'
+assert_status 1 result_qualified_ips "$TMP/no-such-preflight.csv" 200 0.3
 
 # --- result_merge_csv: one header, deduped by IP keeping the faster row ---
 cat > "$TMP/merge-main.csv" <<'EOF'

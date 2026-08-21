@@ -93,6 +93,7 @@ var ACTIVE_PHASES = {
 	preparing: true,
 	detecting_network: true,
 	testing: true,
+	testing_recheck: true,
 	testing_latency: true,
 	testing_download: true,
 	validating_result: true,
@@ -739,6 +740,12 @@ function buildConfigMap(view, summary) {
 	o.datatype = 'and(uinteger,min(0),max(100))';
 	o.default = '20';
 	o.description = _('已发布 IP 复测仍合格时，新 IP 速度需高出该百分比才替换，用于减少 DNS 抖动。0 表示总是取最快。');
+
+	o = s.taboption('speedtest', form.Value, 'speed_weight', _('速度权重（%）'));
+	o.ucisection = 'test';
+	o.datatype = 'and(uinteger,min(0),max(100))';
+	o.default = '60';
+	o.description = _('优选节点按速度与延迟加权评分，此项为速度占比，其余归延迟。100 表示只看速度，0 表示只看延迟。调低可以更偏向就近机房。');
 
 	o = bindPreferredOption(s.taboption('speedtest', form.ListValue, 'provider', _('优选反代提供商')));
 	o.value('auto', _('自动根据本地运营商选择'));

@@ -215,6 +215,7 @@ printf '%s\n' "$js" | grep -F "formatGeo(preferredNode)" >/dev/null \
 
 assert_contains "$js" "'direct_mode'"
 assert_contains "$js" "'publish_switch_margin'"
+assert_contains "$js" "'speed_weight'"
 assert_contains "$js" 'and(uinteger,min(0),max(100))'
 
 printf 'OK: luci dashboard contracts\n'

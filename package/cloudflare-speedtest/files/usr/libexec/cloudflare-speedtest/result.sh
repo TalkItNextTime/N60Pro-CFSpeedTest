@@ -228,6 +228,35 @@ result_reject_summary() {
     ' "$file"
 }
 
+# result_qualified_ips FILE MAX_LATENCY MAX_LOSS
+# Prints the public IPv4 addresses that passed the latency/loss gate, one per
+# line, in the order the CSV lists them (cfst writes it latency-ascending).
+# The download pass uses this to re-measure only the addresses the preflight
+# already proved reachable; re-testing the whole sample doubles the latency
+# phase, which is the dominant cost once measurements are real.
+result_qualified_ips() {
+    file="$1"
+    max_latency="$2"
+    max_loss="$3"
+    [ -f "$file" ] || return 1
+    awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" "
+        function is_num(v) { return v ~ /^[0-9]+([.][0-9]+)?\$/ }
+        $_CFST_AWK_IS_PUBLIC_IPV4"'
+        NR == 1 { next }
+        {
+            sub(/\r$/, "", $0)
+            if (NF != 7) next
+            if (!is_public_ipv4($1)) next
+            if (!is_num($3) || !is_num($4) || !is_num($5)) next
+            if ($3 + 0 <= 0) next
+            if ($5 + 0 <= 0 || $5 + 0 > max_latency + 0) next
+            if ($4 + 0 < 0 || $4 + 0 > max_loss + 0) next
+            if (seen[$1]++) next
+            print $1
+        }
+    ' "$file"
+}
+
 # result_merge_csv OUT FIRST [SECOND ...]
 # Writes one CSV_HEADER line followed by the data rows of every readable input,
 # deduplicated by IP keeping the row with the highest speed. Missing or empty
@@ -252,9 +281,13 @@ result_merge_csv() {
 }
 
 # select_best_result FILE MAX_LATENCY MAX_LOSS MIN_SPEED [STICKY_IP] [MARGIN_PCT]
-# Prints one compact JSON object for the best qualified candidate. When
-# STICKY_IP is qualified it is retained unless another candidate exceeds it by
-# more than MARGIN_PCT percent.
+# Prints one compact JSON object for the best qualified candidate. Candidates
+# are scored on download speed and latency together, each normalised against the
+# best value in the qualified set, so the winner is the best compromise rather
+# than the raw fastest — a burst-speed winner three timezones away loses to a
+# nearby node that is only slightly slower. SPEED_WEIGHT is that split as a
+# percentage; latency takes the remainder. When STICKY_IP is qualified it is
+# retained unless another candidate exceeds its score by more than MARGIN_PCT.
 # Exit 50 RESULT_BAD_CSV or 51 RESULT_NO_QUALIFIED_IP on failure.
 select_best_result() {
     file="$1"
@@ -263,6 +296,7 @@ select_best_result() {
     min_speed="$4"
     sticky_ip="${5:-}"
     margin_pct="${6:-0}"
+    speed_weight="${7:-60}"
 
     CFST_ERROR_CODE=''
     CFST_ERROR_MESSAGE=''
@@ -280,7 +314,7 @@ select_best_result() {
     # builds silently ignores -t/-k and falls back to whole-line lexicographic
     # order, which picked the lowest-numbered IP instead of the fastest.
     best="$(awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" -v min_speed_mbps="$min_speed" \
-        -v sticky_ip="$sticky_ip" -v margin_pct="$margin_pct" "
+        -v sticky_ip="$sticky_ip" -v margin_pct="$margin_pct" -v speed_weight="$speed_weight" "
         function is_num(v) { return v ~ /^[0-9]+([.][0-9]+)?\$/ }
         $_CFST_AWK_IS_PUBLIC_IPV4"'
         NR == 1 { next }
@@ -300,40 +334,48 @@ select_best_result() {
             if (latency + 0 <= 0 || latency + 0 > max_latency + 0) next
             if (loss + 0 < 0 || loss + 0 > max_loss + 0) next
             if (speed + 0 < 0 || speed + 0 < (min_speed_mbps + 0) / 8) next
-            # speed desc, then latency asc, then loss asc
-            better = 0
-            if (best_ip == "") better = 1
-            else if (speed + 0 > best_speed + 0) better = 1
-            else if (speed + 0 == best_speed + 0) {
-                if (latency + 0 < best_latency + 0) better = 1
-                else if (latency + 0 == best_latency + 0 && loss + 0 < best_loss + 0) better = 1
-            }
-            if (better) {
-                best_ip = ip
-                best_loss = loss
-                best_latency = latency
-                best_speed = speed
-                best_colo = colo
-            }
-            if (sticky_ip != "" && ip == sticky_ip) {
-                sticky_found = 1
-                sticky_loss = loss
-                sticky_latency = latency
-                sticky_speed = speed
-                sticky_colo = colo
-            }
+            # Collect first, score in END: both normalisers need the whole set.
+            n++
+            r_ip[n] = ip
+            r_loss[n] = loss
+            r_latency[n] = latency
+            r_speed[n] = speed
+            r_colo[n] = colo
+            if (speed + 0 > top_speed) top_speed = speed + 0
+            if (low_latency == 0 || latency + 0 < low_latency) low_latency = latency + 0
         }
         END {
-            if (best_ip == "") exit
-            # Keep the currently published IP unless a candidate is faster by
-            # more than the configured margin. Speed measurements carry enough
-            # noise that always taking the maximum churns the DNS record.
-            if (sticky_found && best_ip != sticky_ip &&
-                best_speed + 0 <= (sticky_speed + 0) * (1 + (margin_pct + 0) / 100)) {
-                printf "%s,%s,%s,%s,%s\n", sticky_ip, sticky_loss, sticky_latency, sticky_speed, sticky_colo
-            } else {
-                printf "%s,%s,%s,%s,%s\n", best_ip, best_loss, best_latency, best_speed, best_colo
+            if (n == 0) exit
+            ws = (speed_weight + 0) / 100
+            if (ws < 0) ws = 0
+            if (ws > 1) ws = 1
+            wl = 1 - ws
+            best_i = 0
+            sticky_i = 0
+            for (i = 1; i <= n; i++) {
+                speed_part = (top_speed > 0) ? (r_speed[i] + 0) / top_speed : 0
+                latency_part = (low_latency > 0) ? low_latency / (r_latency[i] + 0) : 0
+                score[i] = speed_part * ws + latency_part * wl
+                if (best_i == 0) better = 1
+                else if (score[i] > score[best_i]) better = 1
+                else if (score[i] == score[best_i]) {
+                    if (r_latency[i] + 0 < r_latency[best_i] + 0) better = 1
+                    else if (r_latency[i] + 0 == r_latency[best_i] + 0 &&
+                             r_loss[i] + 0 < r_loss[best_i] + 0) better = 1
+                    else better = 0
+                }
+                else better = 0
+                if (better) best_i = i
+                if (sticky_ip != "" && r_ip[i] == sticky_ip) sticky_i = i
             }
+            # Keep the currently published IP unless a candidate scores higher
+            # by more than the configured margin. Measurements carry enough
+            # noise that always taking the maximum churns the DNS record.
+            if (sticky_i > 0 && best_i != sticky_i &&
+                score[best_i] <= score[sticky_i] * (1 + (margin_pct + 0) / 100)) {
+                best_i = sticky_i
+            }
+            printf "%s,%s,%s,%s,%s\n", r_ip[best_i], r_loss[best_i], r_latency[best_i], r_speed[best_i], r_colo[best_i]
         }
     ' "$file")"
 

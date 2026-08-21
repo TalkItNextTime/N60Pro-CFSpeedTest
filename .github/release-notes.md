@@ -1,15 +1,24 @@
 # Cloudflare 优选 IP for N60 Pro
 
-本版本修复了"没有符合条件的测速结果"、优选 IP 选取错误，以及通过 opkg 安装后 LuCI 界面无法工作的问题。
+本版本让测速流量绕过路由器上的透明代理，新增上轮 IP 复测与发布 IP 粘滞，并把节点归属改为真实落地机房。
 
 ## 修复内容
 
-- 修复 `luci-app-cloudflare-speedtest` 打包时 `/usr/libexec/rpcd/cloudflare-speedtest` 缺少可执行权限的问题。rpcd 会静默拒绝加载不可执行的插件，导致通过 opkg 全新安装后 `ubus` 中没有 `cloudflare-speedtest` 对象、整个 LuCI 页面不可用。此前用文件覆盖方式部署的机器不受影响。
-- 修复下载测速只尝试固定几个 IP 就放弃的问题。现在会把界面上的最低下载速度作为 `-sl` 下限传给测速程序，跳过实际不可用的低延迟 IP 继续尝试，直到凑够"下载候选数"个达标地址。这是"延迟预检通过、却报没有符合条件的测速结果"的直接原因。
-- 修复选取结果时并非取最快 IP 的问题。原先依赖 `sort -t, -k6,6nr` 排序，而部分 OpenWrt 的 BusyBox `sort` 会忽略 `-t/-k` 退化为整行字典序，导致选中编号最小的 IP 而不是最快的。排序改在 awk 内完成。
-- 修复失败原因被吞掉的问题。结果筛选此前在子 shell 中执行，错误码无法回传，表头异常与无合格结果都笼统报成"没有符合条件的测速结果"。
-- 新增筛选诊断日志 `result_reject rows=… latency_loss_ok=… max_speed_mbps=… required_mbps=…`，可直接看出是延迟、丢包还是下载速度这一关清空了结果集。
-- "下载候选数"默认值由 5 调整为 10（仅影响全新安装，升级会保留既有配置）。
+- **测速走直连。** 路由器上运行 passwall2 等透明代理时，`PSW2_OUTPUT_NAT` 以一条无条件的 `ip protocol tcp counter redirect to :1041` 结尾，本机发出的每个 TCP 连接都先被抓进 xray，测速握手实际是和本地代理完成的。实测后果：延迟显示 0.46–1.67 ms 而非真实的百毫秒级，下载速度 0.00 MB/s，地区码 `N/A`。现在测速进程以专用用户 `cfst` 运行，独立 nftables 表给该 uid 的出站包打 `0xff` 标记，passwall2 自身防环用的 `meta mark 0x000000ff ... return` 规则据此放行。改后同一批 IP 测出 56–168 ms、31–52 MB/s、colo 为 SJC/NRT/SIN/LAX。按 socket 归属匹配，只有测速进程直连，其他流量不受影响。
+- **上轮 IP 先复测。** 测速阶段开始时先对上次测速与上次发布的 IP 单独跑一轮完整测速，合格则并入结果表参与优选。只要旧 IP 仍然可用，本轮候选抽样不佳就不会让整个任务失败。
+- **发布 IP 粘滞。** 已发布 IP 复测仍合格时，新 IP 速度需高出「切换阈值」百分比才替换，默认 20%，可在界面调整。速度测量本身有噪声，总是取最大值会让 DNS 记录反复抖动。
+- **节点归属改用 colo。** 原先显示对节点 IP 做 ipinfo 查询得到的 `region / isp / asn`，对任播地址永远是注册地「美国 California San Francisco / CLOUDFLARENET」，与实际落地机房无关。现在显示 `LAX / 美国 洛杉矶` 这样的真实机房，未收录的代码原样显示。
+- 优选节点块新增「最近测速时间」与「最近发布时间」。
+
+## 新增设置
+
+测速设置页新增两项：**测速走直连**（默认开启）与**切换阈值（%）**（默认 20）。
+
+## 升级须知
+
+直连后测得的是真实延迟，数值会明显高于之前经代理测出的假值，延迟预检也会明显变慢（2000 个候选约需 4–5 分钟）。若日志中的 `result_reject` 显示 `latency_rejected` 占绝大多数，说明真实延迟普遍高于当前「最高延迟」设置，在界面上调高即可。
+
+安装时会创建系统用户 `cfst`（uid/gid 6520）供 nftables 按 uid 匹配。缺少 `nft` 或该用户时，插件会记录告警并以原有方式继续运行，不会导致任务失败。
 
 ## 安装包
 
@@ -31,7 +40,7 @@ printf '%s\n' "$DISTRIB_ARCH"
 
 ### 手动安装
 
-从本 Release 下载 `cloudflare-speedtest_*.ipk`、`luci-app-cloudflare-speedtest_*.ipk` 和 `SHA256SUMS`，校验后上传到路由器：
+从本 Release 下载两个 ipk 与 `SHA256SUMS`，校验后上传：
 
 ```sh
 sha256sum -c SHA256SUMS
@@ -44,29 +53,10 @@ ssh root@192.168.1.1 '
 '
 ```
 
-请将 `192.168.1.1` 替换为路由器地址。升级时会保留已有的 `/etc/config/cloudflare-speedtest` 配置。
-
-### 使用安装脚本
-
-也可以在路由器中下载本 Release 的 `install.sh`：
-
-```sh
-wget -O /tmp/install.sh \
-  "https://github.com/TalkItNextTime/N60Pro-CFSpeedTest/releases/download/<tag>/install.sh"
-sh /tmp/install.sh --version <tag>
-```
+请将 `192.168.1.1` 替换为路由器地址。升级会保留已有的 `/etc/config/cloudflare-speedtest` 配置。
 
 安装后进入 LuCI 的 **服务 → Cloudflare 优选 IP**。如浏览器仍显示旧界面，请使用 `Ctrl + F5` 强制刷新。
 
-## 透明代理环境提示
-
-若路由器上运行 passwall / OpenClash 等透明代理并对全部出站 TCP 做重定向，测速得到的延迟是本地代理的 accept 时间（常见 1～5 ms），并非真实 RTT，`地区码` 也可能为 `N/A`。此时延迟排序基本失去意义，实际可用性完全依赖下载测速这一关，建议适当提高"下载候选数"或把测速流量排除在代理规则之外。
-
 ## Cloudflare Token
 
-请使用仅作用于目标 Zone 的 API Token，最小权限为：
-
-- `Zone:Read`
-- `DNS:Edit`
-
-不要使用 Global API Key。Token 会写入路由器 UCI 配置，请保护好路由器后台、备份文件和 SSH 登录权限。
+请使用仅作用于目标 Zone 的 API Token，最小权限为 `Zone:Read` 与 `DNS:Edit`。不要使用 Global API Key。Token 会写入路由器 UCI 配置，请保护好路由器后台、备份文件和 SSH 登录权限。
