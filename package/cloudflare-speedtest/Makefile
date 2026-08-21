@@ -68,6 +68,7 @@ define Package/cloudflare-speedtest/install
 	$(INSTALL_DATA) ./files/usr/share/cloudflare-speedtest/cities.tsv $(1)/usr/share/cloudflare-speedtest/
 	$(INSTALL_DATA) ./files/usr/share/cloudflare-speedtest/providers.tsv $(1)/usr/share/cloudflare-speedtest/
 	$(INSTALL_DATA) ./files/usr/share/cloudflare-speedtest/ip.txt $(1)/usr/share/cloudflare-speedtest/
+	$(INSTALL_DATA) ./files/usr/share/cloudflare-speedtest/colos.tsv $(1)/usr/share/cloudflare-speedtest/
 
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/etc/config/cloudflare-speedtest $(1)/etc/config/cloudflare-speedtest

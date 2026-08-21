@@ -314,6 +314,7 @@ reset_env() {
     export CFST_LOG_FILE="$TMP/plugin.log"
     export CFST_CITIES_FILE="$CFST_ROOT/package/cloudflare-speedtest/files/usr/share/cloudflare-speedtest/cities.tsv"
     export CFST_PROVIDERS_FILE="$CFST_ROOT/package/cloudflare-speedtest/files/usr/share/cloudflare-speedtest/providers.tsv"
+    export CFST_COLOS_FILE="$CFST_ROOT/package/cloudflare-speedtest/files/usr/share/cloudflare-speedtest/colos.tsv"
     export CFST_TEST_UCI_FILE="$TMP/uci"
     export CFST_MOCK_CFST_LOG="$TMP/cfst.args"
     export CFST_MOCK_CFST_FIXTURE="$FIXTURES_R/valid.csv"
@@ -378,6 +379,11 @@ run_cli run --mode test-only --trigger manual
 status="$?"
 set -e
 assert_eq "$status" "0"
+# The Chinese colo name is resolved at test time and stored in state, so the
+# frontend never has to read a data file.
+st_state="$(state_text)"
+assert_contains "$st_state" '"colo":"HKG"'
+assert_contains "$st_state" '"colo_name":"中国 香港"'
 args="$(tr -d '\r' < "$TMP/cfst.args")"
 assert_contains "$args" ' -p 0'
 assert_contains "$args" ' -n 50'

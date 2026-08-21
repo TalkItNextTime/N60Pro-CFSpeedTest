@@ -32,6 +32,8 @@ runner_source_libs() {
     # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/result.sh"
     # shellcheck source=/dev/null
+    . "$CFST_LIB_DIR/colo.sh"
+    # shellcheck source=/dev/null
     . "$CFST_LIB_DIR/dns.sh"
 }
 
@@ -243,6 +245,7 @@ runner_build_tested_json() {
     colo="$(runner_json_field "$best" colo)"
     escaped_ip="$(json_escape "$ip")"
     escaped_colo="$(json_escape "$colo")"
+    escaped_colo_name="$(json_escape "$(colo_chinese_name "$colo")")"
     escaped_host="$(json_escape "$hostname")"
     region="$(runner_json_field "$info" region)"
     city="$(runner_json_field "$info" city)"
@@ -259,11 +262,11 @@ runner_build_tested_json() {
     now="$(cfst_now)"
     suffix=",\"region\":\"$escaped_region\",\"city\":\"$escaped_city\",\"isp\":\"$escaped_isp\",\"asn\":\"$escaped_asn\",\"llc\":\"$escaped_llc\",\"geo_source\":\"$escaped_source\",\"tested_at\":$now"
     if [ -n "$hostname" ]; then
-        printf '{"ip":"%s","latency_ms":%s,"loss_ratio":%s,"speed_mbps":%s,"colo":"%s","hostname":"%s"%s}' \
-            "$escaped_ip" "$latency" "$loss" "$speed" "$escaped_colo" "$escaped_host" "$suffix"
+        printf '{"ip":"%s","latency_ms":%s,"loss_ratio":%s,"speed_mbps":%s,"colo":"%s","colo_name":"%s","hostname":"%s"%s}' \
+            "$escaped_ip" "$latency" "$loss" "$speed" "$escaped_colo" "$escaped_colo_name" "$escaped_host" "$suffix"
     else
-        printf '{"ip":"%s","latency_ms":%s,"loss_ratio":%s,"speed_mbps":%s,"colo":"%s"%s}' \
-            "$escaped_ip" "$latency" "$loss" "$speed" "$escaped_colo" "$suffix"
+        printf '{"ip":"%s","latency_ms":%s,"loss_ratio":%s,"speed_mbps":%s,"colo":"%s","colo_name":"%s"%s}' \
+            "$escaped_ip" "$latency" "$loss" "$speed" "$escaped_colo" "$escaped_colo_name" "$suffix"
     fi
 }
 
@@ -278,6 +281,7 @@ runner_build_published_json() {
     colo="$(runner_json_field "$best" colo)"
     escaped_ip="$(json_escape "$ip")"
     escaped_colo="$(json_escape "$colo")"
+    escaped_colo_name="$(json_escape "$(colo_chinese_name "$colo")")"
     escaped_host="$(json_escape "$hostname")"
     region="$(runner_json_field "$info" region)"
     city="$(runner_json_field "$info" city)"
@@ -286,8 +290,8 @@ runner_build_published_json() {
     llc="$(runner_json_field "$info" llc)"
     source="$(runner_json_field "$info" source)"
     now="$(cfst_now)"
-    printf '{"ip":"%s","latency_ms":%s,"loss_ratio":%s,"speed_mbps":%s,"colo":"%s","hostname":"%s","region":"%s","city":"%s","isp":"%s","asn":"%s","llc":"%s","geo_source":"%s","published_at":%s}' \
-        "$escaped_ip" "$latency" "$loss" "$speed" "$escaped_colo" "$escaped_host" \
+    printf '{"ip":"%s","latency_ms":%s,"loss_ratio":%s,"speed_mbps":%s,"colo":"%s","colo_name":"%s","hostname":"%s","region":"%s","city":"%s","isp":"%s","asn":"%s","llc":"%s","geo_source":"%s","published_at":%s}' \
+        "$escaped_ip" "$latency" "$loss" "$speed" "$escaped_colo" "$escaped_colo_name" "$escaped_host" \
         "$(json_escape "$region")" "$(json_escape "$city")" "$(json_escape "$isp")" "$(json_escape "$asn")" "$(json_escape "$llc")" "$(json_escape "$source")" "$now"
 }
 
