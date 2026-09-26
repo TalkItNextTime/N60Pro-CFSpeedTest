@@ -63,3 +63,11 @@ ssh root@192.168.1.1 '
 ## Cloudflare Token
 
 请使用仅作用于目标 Zone 的 API Token，最小权限为 `Zone:Read` 与 `DNS:Edit`。不要使用 Global API Key。Token 会写入路由器 UCI 配置，请保护好路由器后台、备份文件和 SSH 登录权限。
+
+## 本次更新（r10）
+
+- 新增逐个 IP 实时测速结果展示：延迟、下载开始和下载完成会实时写入候选表。
+- 直连通道同时覆盖测速、Cloudflare API、GeoIP 与优选列表请求，兼容 OpenClash 透明代理。
+- 修复测速下载卡住时停止按钮无法终止残留进程的问题。
+- 修复手动任务完成后因 cron 小时列表包含当前小时而立即重复启动的问题。
+- 发布资产包含适用于 `aarch64_cortex-a53` 的核心 IPK 与 LuCI IPK。

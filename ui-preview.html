@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<title>Cloudflare 优选 IP 设置页预览</title>
+	<link rel="stylesheet" href="/package/luci-app-cloudflare-speedtest/htdocs/luci-static/resources/view/cloudflare-speedtest/overview.css">
+	<style>
+		body { margin: 0; padding: 24px; background: #eef1f4; color: #1f2933; font: 14px/1.45 Arial, sans-serif; }
+		.page { max-width: 1180px; margin: 0 auto; }
+		.cbi-button { min-height: 34px; padding: 7px 12px; border: 1px solid #aeb8c4; border-radius: 4px; background: #fff; color: #27313b; }
+		.cbi-button-action.important { border-color: #087f8c; background: #087f8c; color: #fff; }
+		.cbi-button-negative { border-color: #c9362b; color: #c9362b; }
+		.cbi-button-apply { border-color: #238636; color: #176527; }
+		.cbi-section, .cbi-section-node, .cbi-map { margin: 0; padding: 0; }
+		.cbi-tabmenu { list-style: none; }
+		.cbi-value-field input, .cbi-value-field select { width: 100%; padding: 7px 8px; border: 1px solid #b8c2cf; background: #fff; }
+	</style>
+</head>
+<body>
+<main class="page cfst-overview">
+	<header class="cfst-topbar">
+		<div class="cfst-brand"><h2>Cloudflare 优选 IP</h2><p>测速、候选筛选与 DNS 发布控制台</p></div>
+		<div class="cfst-runtime cfst-tone-active"><span class="cfst-runtime-dot"></span><div><span class="cfst-runtime-label">任务状态</span><strong class="cfst-runtime-value">下载测速</strong></div></div>
+	</header>
+	<div class="cfst-dashboard">
+		<section class="cfst-run-panel">
+			<p class="cfst-panel-kicker">当前任务</p><h3>下载测速</h3>
+			<p class="cfst-run-message">正在下载测速 7/20（35%，预计剩余 2 分 8 秒）</p>
+			<div class="cfst-progress-track"><div class="cfst-progress-value" style="width:35%"></div></div>
+			<div class="cfst-run-footer"><div><span>下次自动任务</span><strong>2026/9/24 23:17:00</strong></div><div><span>当前进度</span><strong>35%</strong></div></div>
+			<div class="cfst-run-candidates"><section class="cfst-candidates">
+				<div class="cfst-section-head"><div><h3>实时测速候选 IP</h3><p>当前任务产生的延迟、速度与门槛判定结果</p></div><span class="cfst-count">4 条结果</span></div>
+				<div class="cfst-table-wrap"><table class="table"><tr><th>IP</th><th>延迟</th><th>速度</th><th>丢包</th><th>节点归属</th><th>状态</th></tr><tr><td>104.18.2.10</td><td>38.1 ms</td><td>256.40 Mbps</td><td>0.0%</td><td>HKG / 中国 香港</td><td><span class="cfst-result-state is-passed">下载通过</span></td></tr><tr><td>104.18.3.20</td><td>42.8 ms</td><td>188.20 Mbps</td><td>0.0%</td><td>HKG / 中国 香港</td><td><span class="cfst-result-state is-passed">下载通过</span></td></tr><tr><td>104.19.1.18</td><td>68.7 ms</td><td>0.00 Mbps</td><td>0.0%</td><td>NRT / 日本 东京</td><td><span class="cfst-result-state is-pending">等待下载</span></td></tr><tr><td>104.20.4.12</td><td>245.2 ms</td><td>0.00 Mbps</td><td>25.0%</td><td>LAX / 美国 洛杉矶</td><td><span class="cfst-result-state">延迟未通过</span></td></tr></table></div>
+			</section></div>
+		</section>
+		<div class="cfst-status-stack">
+			<section class="status-card cfst-status-card"><h3>最近测速</h3><div class="cfst-data-row"><span class="cfst-data-label">候选 IP</span><span class="cfst-data-value">104.18.2.10</span></div><div class="cfst-data-row"><span class="cfst-data-label">节点归属</span><span class="cfst-data-value">HKG / 中国 香港</span></div><div class="cfst-data-row"><span class="cfst-data-label">延迟 / 速度</span><span class="cfst-data-value">38.1 ms / 256.4 Mbps</span></div><div class="cfst-data-row"><span class="cfst-data-label">最近测速时间</span><span class="cfst-data-value">2026/9/24 17:10</span></div></section>
+			<section class="status-card cfst-status-card"><h3>DNS 发布</h3><div class="cfst-data-row"><span class="cfst-data-label">发布 IP</span><span class="cfst-data-value">104.18.2.10</span></div><div class="cfst-data-row"><span class="cfst-data-label">管理记录</span><span class="cfst-data-value">cf.example.com</span></div><div class="cfst-data-row"><span class="cfst-data-label">最近发布时间</span><span class="cfst-data-value">2026/9/24 17:11</span></div></section>
+			<section class="status-card cfst-status-card"><h3>网络信息</h3><div class="cfst-data-row"><span class="cfst-data-label">本地归属</span><span class="cfst-data-value">深圳电信</span></div><div class="cfst-data-row"><span class="cfst-data-label">优选节点</span><span class="cfst-data-value">HKG / 中国香港</span></div><div class="cfst-data-row"><span class="cfst-data-label">API Token</span><span class="cfst-data-value">已配置</span></div></section>
+		</div>
+	</div>
+	<section class="cfst-actions">
+		<div class="cfst-actions-copy"><h3>任务控制</h3><p>手动任务与定时任务共用同一运行锁</p></div>
+		<div class="cfst-action-buttons"><button class="cbi-button cbi-button-action important">立即测速并更新 DNS</button><button class="cbi-button cbi-button-action">仅测速</button><button class="cbi-button cbi-button-negative">停止当前任务</button><button class="cbi-button cbi-button-apply">验证凭据</button></div>
+	</section>
+	<section class="cfst-settings-shell">
+		<div class="cfst-section-head"><div><h3>设置中心</h3><p>保存配置不会自动启动测速任务</p></div><span class="cfst-count">每 6 小时</span></div>
+		<div class="cfst-settings-body"><div class="cbi-map"><div class="cbi-section">
+			<ul class="cbi-tabmenu"><li class="cbi-tab"><a>基本设置</a></li><li><a>Cloudflare</a></li><li><a>测速策略</a></li><li><a>IP 来源</a></li><li><a>地区命名</a></li><li><a>运行日志</a></li></ul>
+			<div class="cbi-value"><label class="cbi-value-title">启用定时任务</label><div class="cbi-value-field"><input type="checkbox" checked><div class="cbi-value-description">按配置周期自动执行测速并更新 DNS。</div></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">测速周期（小时）</label><div class="cbi-value-field"><input value="6"><div class="cbi-value-description">允许范围为 1 到 24 小时。</div></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">启动延迟（秒）</label><div class="cbi-value-field"><input value="120"><div class="cbi-value-description">设备启动后等待网络稳定再执行任务。</div></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">日志级别</label><div class="cbi-value-field"><select><option>info</option><option>debug</option></select></div></div>
+		</div></div></div>
+	</section>
+</main>
+</body>
+</html>

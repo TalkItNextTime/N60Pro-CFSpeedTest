@@ -81,6 +81,8 @@ _cf_classify_http() {
 # cf_api METHOD PATH [BODY]
 # Uses CFST_API_TOKEN from environment. Writes under CFST_TASK_DIR.
 # Sets CFST_HTTP_STATUS, CFST_CF_BODY_FILE, CFST_CF_HEADERS_FILE.
+# direct_curl (direct.sh) keeps the API call off transparent proxies.
+command -v direct_curl >/dev/null 2>&1 || direct_curl() { curl "$@"; }
 cf_api() {
     method="$1"
     path="$2"
@@ -124,7 +126,7 @@ cf_api() {
         # Do not toggle set -e here; it would leak into the caller shell.
         if [ -n "$body" ]; then
             http_code="$(
-                curl --silent --show-error --noproxy '*' \
+                direct_curl --silent --show-error --noproxy '*' \
                     --connect-timeout 15 \
                     --max-time 30 \
                     -X "$method" \
@@ -138,7 +140,7 @@ cf_api() {
             )" && curl_status=0 || curl_status=$?
         else
             http_code="$(
-                curl --silent --show-error --noproxy '*' \
+                direct_curl --silent --show-error --noproxy '*' \
                     --connect-timeout 15 \
                     --max-time 30 \
                     -X "$method" \

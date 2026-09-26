@@ -166,8 +166,12 @@ schedule_deferred_line() {
     anchor_hour="$(schedule_date_field "$due" H)" || return 1
     minute="$(printf '%s\n' "$minute" | awk '{ print $1 + 0 }')"
     anchor_hour="$(printf '%s\n' "$anchor_hour" | awk '{ print $1 + 0 }')"
-    hours="$(schedule_hour_list "$requested_interval" "$anchor_hour")" || return 1
-    schedule_cron_line "$requested_interval" "$minute" "$hours"
+    # Cron has no "start on this date" primitive.  Use only the next due
+    # hour here; after that cron invocation, schedule_advance_deferred()
+    # advances the marker and writes the following one-shot hour.  Emitting
+    # the full hour list would also include an earlier hour today and can
+    # restart a just-finished manual task within one minute.
+    schedule_cron_line "$requested_interval" "$minute" "$anchor_hour"
 }
 
 schedule_store_deferred() {
@@ -204,13 +208,40 @@ schedule_defer_after_manual_success() {
     anchor_hour="$(schedule_date_field "$due" H)" || return 1
     minute="$(printf '%s\n' "$minute" | awk '{ print $1 + 0 }')"
     anchor_hour="$(printf '%s\n' "$anchor_hour" | awk '{ print $1 + 0 }')"
-    hours="$(schedule_hour_list "$interval" "$anchor_hour")" || return 1
-    line="$(schedule_cron_line "$interval" "$minute" "$hours")"
+    # Install only the next due hour.  The cron invocation advances the
+    # deferred marker to the following interval before the task starts.
+    line="$(schedule_cron_line "$interval" "$minute" "$anchor_hour")"
     existing="$(schedule_strip_marked | schedule_trim_trailing_blanks)"
     if [ -n "$existing" ]; then content="$(printf '%s\n%s' "$existing" "$line")"; else content="$line"; fi
     schedule_write_crontab "$content" || return 1
     # Persist after the cron line is in place so later apply-schedule keeps it.
     schedule_store_deferred "$due" "$interval" || return 1
+    CFST_SCHEDULE_NEXT_RUN_AT="$due"
+    export CFST_SCHEDULE_NEXT_RUN_AT
+    return 0
+}
+
+# Move a deferred schedule past the occurrence that just launched this cron
+# task, then install the next single due hour.  This keeps the manual-success
+# interval without an immediate same-day duplicate cron run.
+schedule_advance_deferred() {
+    [ -f "$CFST_DEFERRED_SCHEDULE_FILE" ] || return 0
+    IFS=' ' read -r due interval < "$CFST_DEFERRED_SCHEDULE_FILE" || return 1
+    case "$due:$interval" in *[!0-9:]*|*:|:*) return 1 ;; esac
+    now="$(schedule_now)"
+    case "$now" in ''|*[!0-9]*) return 1 ;; esac
+    while [ "$due" -le "$now" ]; do
+        due=$((due + interval * 3600))
+    done
+    schedule_store_deferred "$due" "$interval" || return 1
+    minute="$(schedule_date_field "$due" M)" || return 1
+    anchor_hour="$(schedule_date_field "$due" H)" || return 1
+    minute="$(printf '%s\n' "$minute" | awk '{ print $1 + 0 }')"
+    anchor_hour="$(printf '%s\n' "$anchor_hour" | awk '{ print $1 + 0 }')"
+    line="$(schedule_cron_line "$interval" "$minute" "$anchor_hour")"
+    existing="$(schedule_strip_marked | schedule_trim_trailing_blanks)"
+    if [ -n "$existing" ]; then content="$(printf '%s\n%s' "$existing" "$line")"; else content="$line"; fi
+    schedule_write_crontab "$content" || return 1
     CFST_SCHEDULE_NEXT_RUN_AT="$due"
     export CFST_SCHEDULE_NEXT_RUN_AT
     return 0

@@ -96,17 +96,28 @@ expected_next=$(((CFST_NOW + 6 * 3600 + 59) / 60 * 60))
 assert_eq "$CFST_SCHEDULE_NEXT_RUN_AT" "$expected_next"
 expected_minute="$(schedule_date_field "$expected_next" M)"
 expected_hour="$(schedule_date_field "$expected_next" H)"
-expected_hours="$(schedule_hour_list 6 "$(printf '%s\n' "$expected_hour" | awk '{ print $1 + 0 }')")"
 content="$(cat "$CFST_CRONTAB_FILE")"
 assert_contains "$content" '0 * * * * /bin/true'
-assert_contains "$content" "$(printf '%s\n' "$expected_minute" | awk '{ print $1 + 0 }') $expected_hours * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
+assert_contains "$content" "$(printf '%s\n' "$expected_minute" | awk '{ print $1 + 0 }') $expected_hour * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
 assert_contains "$content" 'cloudflare-speedtest'
 assert_file_exists "$CFST_DEFERRED_SCHEDULE_FILE"
 
 # A later LuCI/procd schedule apply must retain this manual-success anchor.
 write_cron
 content="$(cat "$CFST_CRONTAB_FILE")"
-assert_contains "$content" "$(printf '%s\n' "$expected_minute" | awk '{ print $1 + 0 }') $expected_hours * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
+assert_contains "$content" "$(printf '%s\n' "$expected_minute" | awk '{ print $1 + 0 }') $expected_hour * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
+
+# When that one-shot cron run starts, advance the marker to the following
+# interval instead of leaving an earlier same-day hour in the crontab.
+CFST_NOW=$((expected_next + 1))
+export CFST_NOW
+schedule_advance_deferred
+next_due=$((expected_next + 6 * 3600))
+assert_eq "$CFST_SCHEDULE_NEXT_RUN_AT" "$next_due"
+next_minute="$(schedule_date_field "$next_due" M)"
+next_hour="$(schedule_date_field "$next_due" H)"
+content="$(cat "$CFST_CRONTAB_FILE")"
+assert_contains "$content" "$(printf '%s\n' "$next_minute" | awk '{ print $1 + 0 }') $next_hour * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
 
 # --- disabled removes only marked cron line ---
 CFST_ENABLED=0

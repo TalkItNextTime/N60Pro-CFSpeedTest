@@ -83,6 +83,7 @@ sh /tmp/install.sh --version <tag>
 
 - **灰云**只更新 DNS，适用于让客户端直接解析到优选 IP；**橙云**启用 Cloudflare Proxy，适用于需要代理保护的记录。
 - 路由器上的透明代理可能截获 API 或测速连接；GeoIP 和 CFST 请求必须 **bypass transparent proxy**。如果延迟异常为 `0.xx ms`，先检查是否被代理劫持。
+- `direct_mode` 默认启用：任务期间为插件建立独立 nftables 通道，对 cfst 测速流量及 API/GeoIP/优选列表请求同时使用 0xff 标记、`nogroup` 放行和目标地址 DNAT；任务结束后自动清理规则。若路由器没有 `nogroup` 或不支持 NAT 规则，会自动降级到可用的放行方式。
 
 ## Install/upgrade/uninstall 与诊断
 

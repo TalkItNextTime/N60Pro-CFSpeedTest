@@ -5,11 +5,13 @@ set -eu
 
 LUCI_ROOT="$CFST_ROOT/package/luci-app-cloudflare-speedtest"
 VIEW_JS="$LUCI_ROOT/htdocs/luci-static/resources/view/cloudflare-speedtest/overview.js"
+VIEW_CSS="$LUCI_ROOT/htdocs/luci-static/resources/view/cloudflare-speedtest/overview.css"
 MENU_JSON="$LUCI_ROOT/root/usr/share/luci/menu.d/luci-app-cloudflare-speedtest.json"
 MAKEFILE="$LUCI_ROOT/Makefile"
 ACL_JSON="$LUCI_ROOT/root/etc/acl.d/luci-app-cloudflare-speedtest.json"
 
 assert_file_exists "$VIEW_JS"
+assert_file_exists "$VIEW_CSS"
 assert_file_exists "$MENU_JSON"
 assert_file_exists "$MAKEFILE"
 assert_file_exists "$ACL_JSON"
@@ -54,13 +56,18 @@ card_count="$(printf '%s\n' "$js" | grep -c 'status-card' || true)"
 assert_contains "$js" 'test-and-update'
 assert_contains "$js" 'test-only'
 assert_contains "$js" 'stop'
+assert_contains "$js" 'renderCandidatePanel'
+assert_contains "$js" 'cfst-candidates'
+assert_contains "$js" 'latency_pass'
+assert_contains "$js" 'qualified'
+assert_contains "$js" 'view._startPending = false'
 assert_contains "$js" '立即测速并更新 DNS'
 assert_contains "$js" '仅测速'
 assert_contains "$js" '停止当前任务'
 
 # --- Token password + set_token path ---
 assert_contains "$js" "form.Value, '_api_token'"
-assert_contains "$js" "s.taboption('basic', form.Value, '_api_token'"
+assert_contains "$js" "s.taboption('cloudflare', form.Value, '_api_token'"
 assert_contains "$js" 'o.password = true;'
 # The log controls live only in the logs tab, and the view exposes LuCI's save footer.
 assert_contains "$js" "'_logs_panel'"
@@ -76,10 +83,10 @@ assert_contains "$js" "uci.get('cloudflare-speedtest', 'preferred'"
 assert_contains "$js" "uci.set('cloudflare-speedtest', 'preferred'"
 # Preferred URL edits must stage changes in cloudflare-speedtest.preferred,
 # not in the visual main section used to render the tabbed form.
-assert_contains "$js" "bindPreferredOption(s.taboption('speedtest', form.Value, 'url_ct'"
-assert_contains "$js" "bindPreferredOption(s.taboption('speedtest', form.Value, 'url_cu'"
-assert_contains "$js" "bindPreferredOption(s.taboption('speedtest', form.Value, 'url_cmcc'"
-assert_contains "$js" "bindPreferredOption(s.taboption('speedtest', form.Value, 'url_custom'"
+assert_contains "$js" "bindPreferredOption(s.taboption('sources', form.Value, 'url_ct'"
+assert_contains "$js" "bindPreferredOption(s.taboption('sources', form.Value, 'url_cu'"
+assert_contains "$js" "bindPreferredOption(s.taboption('sources', form.Value, 'url_cmcc'"
+assert_contains "$js" "bindPreferredOption(s.taboption('sources', form.Value, 'url_custom'"
 if printf '%s\n' "$js" | grep -F "var logs = renderLogsPanel(view)" >/dev/null 2>&1; then
 	fail 'runtime logs must not be rendered below the configuration map'
 fi
@@ -114,15 +121,17 @@ assert_contains "$js" 'addDismissibleNotification'
 assert_contains "$js" 'testing: true'
 assert_contains "$js" '_startPending'
 
-# --- form.Map with five tabs ---
+# --- form.Map with six task-oriented tabs ---
 assert_contains "$js" "form.Map('cloudflare-speedtest'"
 assert_contains "$js" 'tab('
 assert_contains "$js" 'basic'
 assert_contains "$js" 'Cloudflare'
-# speed test / naming / logs tab labels
-assert_contains "$js" '测速'
+# performance / sources / naming / logs tab labels
+assert_contains "$js" '测速策略'
+assert_contains "$js" 'IP 来源'
 assert_contains "$js" '命名'
 assert_contains "$js" '日志'
+assert_contains "$js" "L.resource('view/cloudflare-speedtest/overview.css')"
 
 # --- numeric datatypes matching config.sh ranges ---
 assert_contains "$js" 'uinteger'

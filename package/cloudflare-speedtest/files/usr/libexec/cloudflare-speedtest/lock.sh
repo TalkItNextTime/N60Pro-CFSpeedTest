@@ -18,7 +18,7 @@ lock_self_pid() {
 read_lock() {
     field="$1"
     case "$field" in
-        pid|started_at|trigger) : ;;
+        pid|started_at|trigger|child_pid) : ;;
         *) return 2 ;;
     esac
     [ -f "$CFST_LOCK_DIR/$field" ] || return 1

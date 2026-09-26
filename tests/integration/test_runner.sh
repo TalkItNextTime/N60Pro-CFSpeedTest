@@ -312,6 +312,7 @@ reset_env() {
     export CFST_STATE_FILE="$TMP/etc/state.json"
     export CFST_LOCK_DIR="$TMP/runtime/lock"
     export CFST_LOG_FILE="$TMP/plugin.log"
+    export CFST_DIRECT_DNS=''
     export CFST_CITIES_FILE="$CFST_ROOT/package/cloudflare-speedtest/files/usr/share/cloudflare-speedtest/cities.tsv"
     export CFST_PROVIDERS_FILE="$CFST_ROOT/package/cloudflare-speedtest/files/usr/share/cloudflare-speedtest/providers.tsv"
     export CFST_COLOS_FILE="$CFST_ROOT/package/cloudflare-speedtest/files/usr/share/cloudflare-speedtest/colos.tsv"
@@ -391,6 +392,9 @@ assert_eq "$status" "0"
 st_state="$(state_text)"
 assert_contains "$st_state" '"colo":"HKG"'
 assert_contains "$st_state" '"colo_name":"中国 香港"'
+# The live candidate table gets the same backend-resolved colo name.
+st_candidates="$(tr -d '\r' < "$TMP/runtime/candidates.json")"
+assert_contains "$st_candidates" '"colo":"HKG","colo_name":"中国 香港"'
 args="$(tr -d '\r' < "$TMP/cfst.args")"
 assert_contains "$args" ' -p 0'
 assert_contains "$args" ' -n 50'

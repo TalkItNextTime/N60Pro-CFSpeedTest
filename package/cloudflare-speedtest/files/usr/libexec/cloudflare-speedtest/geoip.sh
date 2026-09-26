@@ -93,6 +93,8 @@ parse_uapi_ipinfo() {
 
 # Fetch a provider URL into outfile using curl with proxy bypass.
 # Does not inherit http_proxy/https_proxy/all_proxy (any case).
+# direct_curl (direct.sh) also escapes transparent proxies; plain curl otherwise.
+command -v direct_curl >/dev/null 2>&1 || direct_curl() { curl "$@"; }
 _geo_curl() {
     url="$1"
     outfile="$2"
@@ -101,7 +103,7 @@ _geo_curl() {
     # BusyBox env may lack -u; clear proxy vars in a subshell instead.
     (
         unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
-        curl --noproxy '*' \
+        direct_curl --noproxy '*' \
             --fail-with-body \
             --silent \
             --show-error \

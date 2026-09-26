@@ -1,0 +1,100 @@
+--- a/main.go
++++ b/main.go
+@@ -62,6 +62,8 @@
+         指定IP段数据；直接通过参数指定要测速的 IP 段数据，英文逗号分隔；(默认 空)
+     -o result.csv
+         写入结果文件；如路径含有空格请加上引号；值为空时不写入文件 [-o ""]；(默认 result.csv)
++    -live live.csv
++        实时结果文件；测速过程中逐个 IP 追加延迟、开始下载、下载结果，供其他程序实时展示；(默认 不写入)
+ 
+     -dd
+         禁用下载测速；禁用后测速结果会按延迟排序 (默认按下载速度排序)；(默认 启用)
+@@ -98,6 +100,7 @@
+ 	flag.StringVar(&task.IPFile, "f", "ip.txt", "IP段数据文件")
+ 	flag.StringVar(&task.IPText, "ip", "", "指定IP段数据")
+ 	flag.StringVar(&utils.Output, "o", "result.csv", "输出结果文件")
++	flag.StringVar(&utils.LiveOutput, "live", "", "实时结果文件")
+ 
+ 	flag.BoolVar(&task.Disable, "dd", false, "禁用下载测速")
+ 	flag.BoolVar(&task.TestAll, "allip", false, "测速全部 IP")
+--- a/task/tcping.go
++++ b/task/tcping.go
+@@ -146,4 +146,5 @@
+ 		Colo:     colo,
+ 	}
+ 	p.appendIPData(data)
++	utils.LivePing(data)
+ }
+--- a/task/download.go
++++ b/task/download.go
+@@ -74,11 +74,13 @@
+ 	}
+ 	bar := utils.NewBar(TestCount, bar_b, "")
+ 	for i := 0; i < testNum; i++ {
++		utils.LiveDownloadStart(ipSet[i].IP.String())
+ 		speed, colo := downloadHandler(ipSet[i].IP)
+ 		ipSet[i].DownloadSpeed = speed
+ 		if ipSet[i].Colo == "" { // 只有当 Colo 是空的时候，才写入，否则代表之前是 httping 测速并获取过了
+ 			ipSet[i].Colo = colo
+ 		}
++		utils.LiveDownloadDone(&ipSet[i])
+ 		// 在每个 IP 下载测速后，以 [下载速度下限] 条件过滤结果
+ 		if speed >= MinSpeed*1024*1024 {
+ 			bar.Grow(1, "")
+--- /dev/null
++++ b/utils/live.go
+@@ -0,0 +1,54 @@
++package utils
++
++import (
++	"os"
++	"strings"
++	"sync"
++)
++
++// LiveOutput 为 -live 参数指定的实时结果文件。每完成一个 IP 的延迟测速、
++// 每开始/完成一个 IP 的下载测速都会追加一行，供其他程序在测速过程中逐个 IP 展示：
++//
++//	P,IP,已发送,已接收,丢包率,平均延迟,地区码
++//	D,IP
++//	S,IP,下载速度(MB/s),地区码
++var LiveOutput = ""
++
++var (
++	liveMu   sync.Mutex
++	liveFile *os.File
++)
++
++func writeLive(fields ...string) {
++	liveMu.Lock()
++	defer liveMu.Unlock()
++	if LiveOutput == "" {
++		return
++	}
++	if liveFile == nil {
++		fp, err := os.OpenFile(LiveOutput, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
++		if err != nil {
++			LiveOutput = "" // 无法写入时不再重试，不影响最终结果文件
++			return
++		}
++		liveFile = fp
++	}
++	_, _ = liveFile.WriteString(strings.Join(fields, ",") + "\n")
++}
++
++// LivePing 记录一个完成延迟测速且至少收到一次回应的 IP
++func LivePing(data *PingData) {
++	v := (&CloudflareIPData{PingData: data}).toString()
++	writeLive("P", v[0], v[1], v[2], v[3], v[4], v[6])
++}
++
++// LiveDownloadStart 记录即将开始下载测速的 IP
++func LiveDownloadStart(ip string) {
++	writeLive("D", ip)
++}
++
++// LiveDownloadDone 记录一个完成下载测速的 IP
++func LiveDownloadDone(data *CloudflareIPData) {
++	v := data.toString()
++	writeLive("S", v[0], v[5], v[6])
++}

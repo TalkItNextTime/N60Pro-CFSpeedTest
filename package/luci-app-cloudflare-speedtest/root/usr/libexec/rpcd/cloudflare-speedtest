@@ -14,6 +14,7 @@ set -eu
 : "${CFST_UCI_CONFIG:=/etc/config/cloudflare-speedtest}"
 : "${CFST_UCI_PACKAGE:=cloudflare-speedtest}"
 : "${CFST_LOG_RPC_MAX:=65536}"
+: "${CFST_CANDIDATES_FILE:=$CFST_RUNTIME_DIR/candidates.json}"
 : "${CFST_CRONTAB_FILE:=/etc/crontabs/root}"
 : "${CFST_CRON_MARKER:=# cloudflare-speedtest}"
 
@@ -154,7 +155,15 @@ rpc_status() {
     _schedule="$(rpc_schedule_info)"
     _schedule_body="$(printf '%s' "$_schedule" | sed 's/^{//;s/}$//')"
     _status_body="${_status%\}}"
-    printf '%s,%s}\n' "$_status_body" "$_schedule_body"
+    _candidates='[]'
+    if [ -f "$CFST_CANDIDATES_FILE" ]; then
+        _candidates="$(cat "$CFST_CANDIDATES_FILE" 2>/dev/null || printf '[]')"
+    fi
+    case "$_candidates" in
+        \[*\]) ;;
+        *) _candidates='[]' ;;
+    esac
+    printf '%s,%s,"candidates":%s}\n' "$_status_body" "$_schedule_body" "$_candidates"
 }
 
 rpc_result() {

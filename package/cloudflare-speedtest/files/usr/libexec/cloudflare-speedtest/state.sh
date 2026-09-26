@@ -4,6 +4,7 @@
 : "${CFST_RUNTIME_DIR:=/tmp/cloudflare-speedtest}"
 : "${CFST_STATUS_FILE:=$CFST_RUNTIME_DIR/status.json}"
 : "${CFST_STATE_FILE:=/etc/cloudflare-speedtest/state.json}"
+: "${CFST_CANDIDATES_FILE:=$CFST_RUNTIME_DIR/candidates.json}"
 
 cfst_now() {
     if [ -n "${CFST_NOW:-}" ]; then
@@ -58,6 +59,8 @@ state_write_status() {
 state_init() {
     trigger="${1:-unknown}"
     escaped_trigger="$(json_escape "$trigger")"
+    mkdir -p "$CFST_RUNTIME_DIR" 2>/dev/null || true
+    printf '[]\n' | atomic_write "$CFST_CANDIDATES_FILE" 2>/dev/null || true
     state_write_status preparing 'Preparing task' "\"trigger\":\"$escaped_trigger\""
 }
 

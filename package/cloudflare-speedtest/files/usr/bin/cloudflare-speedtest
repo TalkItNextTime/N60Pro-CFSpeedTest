@@ -9,6 +9,7 @@
 : "${CFST_LOCK_DIR:=$CFST_RUNTIME_DIR/lock}"
 : "${CFST_LOG_FILE:=/var/log/cloudflare-speedtest.log}"
 : "${CFST_SLEEP_CMD:=sleep}"
+: "${CFST_CANDIDATES_FILE:=$CFST_RUNTIME_DIR/candidates.json}"
 
 usage_error() {
     printf '%s\n' "$1" >&2
@@ -50,6 +51,39 @@ cfst_source_runner() {
     . "$CFST_LIB_DIR/runner.sh"
 }
 
+stop_process_tree() {
+    _stop_pid="$1"
+    for _stop_child in $(cat "/proc/$_stop_pid/task/$_stop_pid/children" 2>/dev/null || true); do
+        stop_process_tree "$_stop_child"
+    done
+    kill -TERM "$_stop_pid" 2>/dev/null || true
+}
+
+stop_process_tree_hard() {
+    _stop_pid="$1"
+    for _stop_child in $(cat "/proc/$_stop_pid/task/$_stop_pid/children" 2>/dev/null || true); do
+        stop_process_tree_hard "$_stop_child"
+    done
+    kill -KILL "$_stop_pid" 2>/dev/null || true
+}
+
+stop_orphan_runs() {
+    command -v pgrep >/dev/null 2>&1 || return 1
+    _orphan_found=1
+    for _orphan_pid in $(pgrep -f 'cloudflare-speedtest run --mode' 2>/dev/null || true); do
+        case "$_orphan_pid" in
+            ''|*[!0-9]*|$$) continue ;;
+        esac
+        stop_process_tree "$_orphan_pid"
+        sleep 1
+        if kill -0 "$_orphan_pid" 2>/dev/null; then
+            stop_process_tree_hard "$_orphan_pid"
+        fi
+        _orphan_found=0
+    done
+    [ "$_orphan_found" -eq 0 ]
+}
+
 cmd_run() {
     mode=''
     trigger=''
@@ -87,12 +121,26 @@ cmd_stop() {
     [ "$#" -eq 0 ] || usage_error 'stop: unexpected arguments'
     cfst_source_core
 
-    [ -d "$CFST_LOCK_DIR" ] || return 0
+    if [ ! -d "$CFST_LOCK_DIR" ]; then
+        # A previous SIGKILL or package restart can leave the runner alive
+        # after its lock directory has disappeared. Do not let that orphan
+        # keep updating "download testing" forever or become unstoppable
+        # from LuCI.
+        if stop_orphan_runs; then
+            state_write_status cancelled 'Task cancelled' 2>/dev/null || true
+        fi
+        return 0
+    fi
     owner_pid="$(read_lock pid 2>/dev/null || true)"
     case "$owner_pid" in
         ''|*[!0-9]*) return 0 ;;
     esac
 
+    child_pid="$(read_lock child_pid 2>/dev/null || true)"
+    case "$child_pid" in
+        ''|*[!0-9]*) child_pid='' ;;
+        *) kill -TERM "$child_pid" 2>/dev/null || true ;;
+    esac
     kill -TERM "$owner_pid" 2>/dev/null || true
 
     grace="${CFST_STOP_GRACE_SECONDS:-5}"
@@ -103,6 +151,18 @@ cmd_stop() {
     waited=0
     while [ "$waited" -lt "$grace" ]; do
         if ! kill -0 "$owner_pid" 2>/dev/null; then
+            # The runner normally writes this state from its TERM trap, but a
+            # shell blocked in wait(2), or a signal delivered while cfst is
+            # tearing down, can exit before the trap gets to the write. Do
+            # the externally visible cleanup here as well.
+            current_pid="$(read_lock pid 2>/dev/null || true)"
+            if [ "$current_pid" = "$owner_pid" ]; then
+                if [ -n "$child_pid" ]; then
+                    kill -KILL "$child_pid" 2>/dev/null || true
+                fi
+                state_write_status cancelled 'Task cancelled' 2>/dev/null || true
+                rm -rf "$CFST_LOCK_DIR"
+            fi
             return 0
         fi
         ${CFST_SLEEP_CMD:-sleep} 1
@@ -112,9 +172,16 @@ cmd_stop() {
     # KILL only if the same PID still owns the lock
     current_pid="$(read_lock pid 2>/dev/null || true)"
     if [ "$current_pid" = "$owner_pid" ]; then
+        if [ -n "$child_pid" ]; then
+            kill -KILL "$child_pid" 2>/dev/null || true
+        fi
         if kill -0 "$owner_pid" 2>/dev/null; then
             kill -KILL "$owner_pid" 2>/dev/null || true
         fi
+        # SIGKILL skips the runner EXIT trap. Complete the externally visible
+        # cancellation and unlock here so a later manual/cron run can proceed.
+        state_write_status cancelled 'Task cancelled' 2>/dev/null || true
+        rm -rf "$CFST_LOCK_DIR"
     fi
     return 0
 }

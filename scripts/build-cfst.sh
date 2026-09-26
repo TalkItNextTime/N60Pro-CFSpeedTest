@@ -70,6 +70,25 @@ extract_root="$(find "$SRC_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
     exit 1
 }
 
+# Keep the standalone build identical to the OpenWrt SDK build.  OpenWrt
+# applies package/patches automatically during Build/Prepare; this script
+# must do the same before compiling the pinned source.
+PATCH_DIR="$ROOT/package/cloudflare-speedtest/patches"
+if [ -d "$PATCH_DIR" ]; then
+    if ! command -v patch >/dev/null 2>&1; then
+        printf 'error: patch tool not found; cannot apply CFST package patches\n' >&2
+        exit 1
+    fi
+    for patch_file in "$PATCH_DIR"/*.patch; do
+        [ -f "$patch_file" ] || continue
+        printf 'Applying %s...\n' "$(basename "$patch_file")"
+        (
+            cd "$extract_root"
+            patch -p1 --forward < "$patch_file"
+        )
+    done
+fi
+
 if ! command -v go >/dev/null 2>&1; then
     printf 'error: go toolchain not found (full build requires Linux/CI with Go)\n' >&2
     exit 1

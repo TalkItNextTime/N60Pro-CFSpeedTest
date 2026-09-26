@@ -63,6 +63,7 @@ preferred_select_provider() {
     printf '%s\n' "$provider"
 }
 
+command -v direct_curl >/dev/null 2>&1 || direct_curl() { curl "$@"; }
 preferred_fetch_url() {
     url="$1"
     body="$2"
@@ -73,7 +74,7 @@ preferred_fetch_url() {
     while [ "$attempts" -le 3 ]; do
         if (
             unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
-            curl --noproxy '*' --fail --silent --show-error \
+            direct_curl --noproxy '*' --fail --silent --show-error \
                 --connect-timeout "$timeout" --max-time "$timeout" \
                 --output "$body" --url "$url"
         ); then

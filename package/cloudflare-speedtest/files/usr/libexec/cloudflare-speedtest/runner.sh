@@ -68,13 +68,138 @@ runner_cleanup() {
     fi
     if [ -n "${CFST_CHILD_PID:-}" ]; then
         kill -TERM "$CFST_CHILD_PID" 2>/dev/null || true
+        # A killed/ignored cfst child must not keep EXIT cleanup stuck forever.
+        # Give it a short grace period, then force it down before wait reaps it.
+        grace="${CFST_CHILD_GRACE_SECONDS:-2}"
+        case "$grace" in ''|*[!0-9]*) grace=2 ;; esac
+        if [ "$grace" -gt 0 ]; then
+            "${CFST_SLEEP_CMD:-sleep}" "$grace" 2>/dev/null || true
+        fi
+        kill -KILL "$CFST_CHILD_PID" 2>/dev/null || true
         wait "$CFST_CHILD_PID" 2>/dev/null || true
         CFST_CHILD_PID=''
     fi
     if [ "${CFST_LOCK_HELD:-0}" = "1" ]; then
+        rm -f "$CFST_LOCK_DIR/child_pid" 2>/dev/null || true
         release_lock 2>/dev/null || true
         CFST_LOCK_HELD=0
     fi
+}
+
+runner_publish_candidates() {
+    csv="$1"
+    [ -s "$csv" ] || return 0
+    [ -n "${CFST_CANDIDATES_FILE:-}" ] || return 0
+    [ -f "$csv" ] || return 0
+    max_latency="${CFST_MAX_LATENCY_MS:-200}"
+    max_loss="${CFST_MAX_LOSS_RATIO:-0.2}"
+    min_speed="${CFST_MIN_SPEED_MBPS:-0}"
+    now="$(cfst_now)"
+    {
+        printf '['
+        awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" \
+        -v min_speed="$min_speed" -v now="$now" -v colos="${CFST_COLOS_FILE:-}" '
+        function num(v) { return v ~ /^[0-9]+([.][0-9]+)?$/ }
+        function esc(v) {
+            gsub(/\\/, "\\\\", v); gsub(/"/, "\\\"", v)
+            return v
+        }
+        # Same table as colo_chinese_name; unknown codes get an empty name.
+        BEGIN {
+            if (colos != "") {
+                while ((getline line < colos) > 0) {
+                    if (line ~ /^#/ || line == "") continue
+                    split(line, field, "\t")
+                    colo_name[toupper(field[1])] = field[2]
+                }
+                close(colos)
+            }
+        }
+        NR == 1 { next }
+        {
+            sub(/\r$/, "", $0)
+            if (NF != 7 || !num($2) || !num($3) || !num($4) ||
+                !num($5) || !num($6) || $1 == "") next
+            latency_ok = ($3 + 0 > 0 && $5 + 0 > 0 && $5 + 0 <= max_latency &&
+                $4 + 0 >= 0 && $4 + 0 <= max_loss)
+            qualified = (latency_ok && $6 + 0 >= (min_speed + 0) / 8)
+            if (seen[$1]++) next
+            if (n++) printf ","
+            printf "{\"ip\":\"%s\",\"latency_ms\":%s,\"loss_ratio\":%s,\"speed_mbps\":%.6f,\"colo\":\"%s\",\"colo_name\":\"%s\",\"latency_pass\":%s,\"qualified\":%s,\"updated_at\":%s}",
+                esc($1), $5, $4, ($6 + 0) * 8, esc($7), esc(colo_name[toupper($7)]),
+                (latency_ok ? "true" : "false"), (qualified ? "true" : "false"), now
+        }
+        END { printf "]\n" }
+    ' "$csv"
+    } | atomic_write "$CFST_CANDIDATES_FILE" 2>/dev/null || true
+}
+
+# Fold cfst's -live stream (P/D/S lines) into candidates.json while a run is in
+# progress, so the dashboard shows IPs one at a time instead of only the final
+# CSV. Line formats (see the cfst -live patch):
+#   P,IP,sent,recv,loss,latency_ms,colo   latency measured
+#   D,IP                                  download starting for this IP
+#   S,IP,speed_MB_s,colo                  download finished for this IP
+runner_publish_live() {
+    live="$1"
+    [ -n "${CFST_CANDIDATES_FILE:-}" ] || return 0
+    [ -s "$live" ] || return 0
+    max_latency="${CFST_MAX_LATENCY_MS:-200}"
+    max_loss="${CFST_MAX_LOSS_RATIO:-0.2}"
+    min_speed="${CFST_MIN_SPEED_MBPS:-0}"
+    now="$(cfst_now)"
+    {
+        printf '['
+        awk -F, -v max_latency="$max_latency" -v max_loss="$max_loss" \
+        -v min_speed="$min_speed" -v now="$now" -v colos="${CFST_COLOS_FILE:-}" -v cap=60 '
+        function esc(v) { gsub(/\\/, "\\\\", v); gsub(/"/, "\\\"", v); return v }
+        BEGIN {
+            if (colos != "") {
+                while ((getline line < colos) > 0) {
+                    if (line ~ /^#/ || line == "") continue
+                    split(line, field, "\t")
+                    colo_name[toupper(field[1])] = field[2]
+                }
+                close(colos)
+            }
+        }
+        {
+            sub(/\r$/, "", $0)
+            ip = $2
+            if (ip == "") next
+            if (!(ip in seen)) { seen[ip] = ++seq; order[seq] = ip }
+            if ($1 == "P") {
+                loss[ip] = $5 + 0; lat[ip] = $6 + 0; pinged[ip] = 1
+                if ($7 != "" && $7 != "N/A") colo[ip] = $7
+            } else if ($1 == "D") {
+                if (!(ip in dseen)) { dseen[ip] = ++dseq; dorder[dseq] = ip }
+                downloading[ip] = 1
+            } else if ($1 == "S") {
+                speed[ip] = $3 + 0; downloaded[ip] = 1; downloading[ip] = 0
+                if ($4 != "" && $4 != "N/A") colo[ip] = $4
+            }
+        }
+        function emit(ip,    lok, mbps, qual) {
+            lok = (pinged[ip] && lat[ip] > 0 && lat[ip] <= max_latency && \
+                   loss[ip] >= 0 && loss[ip] <= max_loss)
+            mbps = speed[ip] * 8
+            qual = (downloaded[ip] && lok && mbps >= (min_speed + 0))
+            if (n++) printf ","
+            printf "{\"ip\":\"%s\",\"latency_ms\":%.2f,\"loss_ratio\":%.2f,\"speed_mbps\":%.6f,\"colo\":\"%s\",\"colo_name\":\"%s\",\"latency_pass\":%s,\"qualified\":%s,\"downloading\":%s,\"downloaded\":%s,\"updated_at\":%s}",
+                esc(ip), lat[ip], loss[ip], mbps, esc(colo[ip]), esc(colo_name[toupper(colo[ip])]),
+                (lok ? "true" : "false"), (qual ? "true" : "false"),
+                (downloading[ip] ? "true" : "false"), (downloaded[ip] ? "true" : "false"), now
+        }
+        END {
+            n = 0
+            # Download-tested IPs first (in test order), then latency-only rows
+            # in arrival order, capped so a large sample stays readable.
+            for (i = 1; i <= dseq && n < cap; i++) emit(dorder[i])
+            for (i = 1; i <= seq && n < cap; i++) if (!(order[i] in dseen)) emit(order[i])
+            printf "]\n"
+        }
+    ' "$live"
+    } | atomic_write "$CFST_CANDIDATES_FILE" 2>/dev/null || true
 }
 
 runner_on_signal() {
@@ -133,6 +258,7 @@ runner_progress_start() {
             "${CFST_SLEEP_CMD:-sleep}" "${CFST_PROGRESS_INTERVAL:-3}" || exit 0
             snapshot="$(progress_snapshot "$capture" 2>/dev/null || true)"
             [ -n "$snapshot" ] || continue
+            runner_publish_live "${CFST_LIVE_FILE:-}" 2>/dev/null || true
             elapsed=$(( $(cfst_now) - started ))
             state_write_status "${CFST_PROGRESS_PHASE:-testing}" \
                 "$(progress_message "$CFST_PROGRESS_LABEL" "${snapshot% *}" "${snapshot#* }" "$elapsed")" \
@@ -154,7 +280,16 @@ runner_run_cfst() {
     out_file="$2"
     latency_only="${3:-0}"
     progress_log="${CFST_TASK_DIR:-/tmp}/cfst-progress.$$"
+    CFST_PROGRESS_CSV="$out_file"
     : > "$progress_log" 2>/dev/null || true
+
+    # cfst appends one line per IP to this file as each latency/download result
+    # lands (see the -live patch). The progress poller folds it into the live
+    # candidate list so the UI shows IPs one by one during the run, not only the
+    # final CSV. Truncated per phase so the download phase starts clean.
+    live_file="${CFST_TASK_DIR:-/tmp}/live.csv"
+    CFST_LIVE_FILE="$live_file"
+    : > "$live_file" 2>/dev/null || true
 
     threads="${CFST_THREADS:-50}"
     attempts="${CFST_ATTEMPTS:-4}"
@@ -208,6 +343,8 @@ runner_run_cfst() {
     if [ -n "$run_user" ]; then
         chown "$run_user" "$prepared_ip" 2>/dev/null || true
         chown "$run_user" "${CFST_TASK_DIR:-/tmp}" 2>/dev/null || true
+        # cfst writes the live file as run_user; pre-create so it owns it.
+        chown "$run_user" "$live_file" 2>/dev/null || true
         launcher="start-stop-daemon -S -c $run_user -x"
         # start-stop-daemon needs -- before the program's own options, but cfst
         # must not receive a bare -- when it is launched directly.
@@ -219,24 +356,25 @@ runner_run_cfst() {
         $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -url "$test_url" -dd -allip >"$progress_log" 2>&1 &
+            -tlr "$max_loss" -url "$test_url" -live "$live_file" -dd -allip >"$progress_log" 2>&1 &
     elif [ "$latency_only" = "1" ]; then
         $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -url "$test_url" -dd >"$progress_log" 2>&1 &
+            -tlr "$max_loss" -url "$test_url" -live "$live_file" -dd >"$progress_log" 2>&1 &
     elif [ -n "$allip_arg" ]; then
         $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" -allip >"$progress_log" 2>&1 &
+            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" -live "$live_file" -allip >"$progress_log" 2>&1 &
     else
         $launcher "$CFST_CFST_BIN" $launcher_sep -f "$prepared_ip" -o "$out_file" -p 0 \
             -n "$threads" -t "$attempts" -dn "$download_count" \
             -dt "$download_seconds" -tp "$port" -tl "$max_latency" \
-            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" >"$progress_log" 2>&1 &
+            -tlr "$max_loss" -sl "$min_speed_mb_s" -url "$test_url" -live "$live_file" >"$progress_log" 2>&1 &
     fi
     CFST_CHILD_PID=$!
+    printf '%s\n' "$CFST_CHILD_PID" > "$CFST_LOCK_DIR/child_pid" 2>/dev/null || true
 
     # Republish cfst's own progress counter as the task status. The poller only
     # lives for the duration of this child, so it cannot race the phase writes
@@ -255,7 +393,9 @@ runner_run_cfst() {
     wait_status=0
     wait "$CFST_CHILD_PID" || wait_status=$?
     CFST_CHILD_PID=''
+    rm -f "$CFST_LOCK_DIR/child_pid" 2>/dev/null || true
     runner_progress_stop
+    runner_publish_candidates "$out_file"
 
     if [ -n "${CFST_WATCHDOG_PID:-}" ]; then
         kill "$CFST_WATCHDOG_PID" 2>/dev/null || true
@@ -463,6 +603,13 @@ run_task() {
     trap 'runner_on_signal' INT TERM
 
     state_init "$trigger"
+    if [ "$trigger" = "cron" ] && [ -f "$CFST_LIB_DIR/schedule.sh" ]; then
+        # A manual-success deferred schedule is represented by one next
+        # occurrence. Advance it before doing work so the next occurrence is
+        # installed without creating a second run in the same minute.
+        . "$CFST_LIB_DIR/schedule.sh"
+        schedule_advance_deferred 2>/dev/null || true
+    fi
     cfst_log info "Task started mode=$mode trigger=$trigger"
 
     set +e
@@ -472,6 +619,14 @@ run_task() {
     # Run six-hourly cleanup independently of whether this run later produces
     # a qualified result. This keeps expired preferred-IP metadata bounded.
     ipinfo_cleanup_if_due 2>/dev/null || true
+
+    # The direct channel covers the whole task: GeoIP and preferred-list
+    # fetches, every cfst invocation (recheck, latency preflight, main pass)
+    # and the Cloudflare API calls. A transparent proxy would otherwise answer
+    # handshakes locally, making every measurement fiction and routing the API
+    # through a proxy node. runner_cleanup removes it on every exit path.
+    CFST_DIRECT_USER="${CFST_DIRECT_USER:-cfst}"
+    direct_enable
 
     # --- detecting_network ---
     state_set_phase detecting_network '正在检测网络信息'
@@ -532,12 +687,6 @@ run_task() {
     # --- testing ---
     state_set_phase testing '正在测速'
     cfst_log info 'phase=testing'
-
-    # Marking must cover every cfst invocation in this phase: the recheck, the
-    # latency preflight and the main pass. A transparent proxy would otherwise
-    # answer the handshake locally and every measurement below is fiction.
-    CFST_DIRECT_USER="${CFST_DIRECT_USER:-cfst}"
-    direct_enable
 
     # Recheck the IPs from the previous round before sampling new candidates. A
     # still-usable address keeps the task from failing when this round's sample
@@ -695,7 +844,6 @@ run_task() {
     fi
 
     # --- validating_result ---
-    direct_disable
     state_set_phase validating_result '正在验证测速结果'
     cfst_log info 'phase=validating_result'
     # Redirect instead of command substitution: select_best_result reports the
