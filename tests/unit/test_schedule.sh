@@ -138,6 +138,10 @@ remove_cron
 [ ! -s "$TMP/reload.log" ] || fail 'reload should not run when already removed'
 
 # --- hotplug ignores non-WAN ---
+# The deferred-schedule test advances CFST_NOW; reset the test clock before
+# creating the hotplug stamp so the debounce case remains monotonic.
+CFST_NOW=1700000000
+export CFST_NOW
 : > "$TMP/hotplug-run.log"
 rm -f "$CFST_HOTPLUG_STAMP_FILE"
 hotplug_schedule ifup lan
