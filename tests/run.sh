@@ -11,6 +11,7 @@ for test_file in "$ROOT"/tests/unit/test_*.sh "$ROOT"/tests/integration/test_*.s
     printf '==> %s\n' "${test_file#"$ROOT"/}"
     if ! sh "$test_file"; then
         failed=1
+        printf '::error title=Host test failed::%s\n' "${test_file#"$ROOT"/}"
     fi
 done
 exit "$failed"
