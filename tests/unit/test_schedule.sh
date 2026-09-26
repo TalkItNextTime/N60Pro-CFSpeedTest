@@ -95,7 +95,7 @@ schedule_defer_after_manual_success
 expected_next=$(((CFST_NOW + 6 * 3600 + 59) / 60 * 60))
 assert_eq "$CFST_SCHEDULE_NEXT_RUN_AT" "$expected_next"
 expected_minute="$(schedule_date_field "$expected_next" M)"
-expected_hour="$(schedule_date_field "$expected_next" H)"
+expected_hour="$(schedule_date_field "$expected_next" H | awk '{ print $1 + 0 }')"
 content="$(cat "$CFST_CRONTAB_FILE")"
 assert_contains "$content" '0 * * * * /bin/true'
 assert_contains "$content" "$(printf '%s\n' "$expected_minute" | awk '{ print $1 + 0 }') $expected_hour * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
@@ -115,7 +115,7 @@ schedule_advance_deferred
 next_due=$((expected_next + 6 * 3600))
 assert_eq "$CFST_SCHEDULE_NEXT_RUN_AT" "$next_due"
 next_minute="$(schedule_date_field "$next_due" M)"
-next_hour="$(schedule_date_field "$next_due" H)"
+next_hour="$(schedule_date_field "$next_due" H | awk '{ print $1 + 0 }')"
 content="$(cat "$CFST_CRONTAB_FILE")"
 assert_contains "$content" "$(printf '%s\n' "$next_minute" | awk '{ print $1 + 0 }') $next_hour * * * /usr/bin/cloudflare-speedtest run --mode test-and-update --trigger cron"
 
