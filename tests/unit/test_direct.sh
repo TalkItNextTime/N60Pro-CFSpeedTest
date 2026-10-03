@@ -95,6 +95,7 @@ direct_curl --url 'http://preferred.test:8080/ct'
 assert_contains "$(cat "$CFST_TEST_CURL_LOG")" '--resolve preferred.test:8080:104.19.193.29'
 
 # --- _direct_resolve: fake-ip answers are never trusted as the real address ---
+# shellcheck disable=SC1090
 . "$DIRECT_SH"   # restore the real _direct_resolve
 cat > "$TMP/nslookup" <<'EOF'
 #!/bin/sh
