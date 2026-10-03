@@ -71,3 +71,9 @@ ssh root@192.168.1.1 '
 - 修复测速下载卡住时停止按钮无法终止残留进程的问题。
 - 修复手动任务完成后因 cron 小时列表包含当前小时而立即重复启动的问题。
 - 发布资产包含适用于 `aarch64_cortex-a53` 的核心 IPK 与 LuCI IPK。
+## r11：自定义 IP 来源兼容性
+
+- 自定义来源现在可解析纯 IPv4、`IPv4:端口`、`#` 注释、CSV/空格分列、HTML 片段以及同一行重复 IP。
+- 自动过滤私网、回环、非法地址、IPv6 和 BestCF 页面的推广头尾记录。
+- 已使用 BestCF、addressesapi、GitHub Raw、JunZhen、CFYes、vvHan 等多种实际列表格式验证。
+- 修复自定义来源报“优选反代地址未返回可用 IPv4 provider=custom”的问题。

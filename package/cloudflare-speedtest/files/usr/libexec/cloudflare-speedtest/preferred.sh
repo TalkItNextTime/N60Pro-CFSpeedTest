@@ -93,14 +93,34 @@ preferred_extract_ips() {
     dest="$2"
     [ -f "$src" ] || return 1
     temporary="${dest}.raw.$$"
+    # Community-maintained lists use several closely related formats:
+    #
+    #   104.17.55.152
+    #   104.17.55.152#HKG
+    #   104.17.55.152:443#HKG
+    #   104.17.55.152:443#name | region | 104.17.55.152
+    #
+    # Do not rely on the first whitespace-delimited field. Extract every IPv4
+    # token in the line, then let validate_public_ipv4 reject private,
+    # loopback, malformed and documentation addresses. sort -u also removes
+    # the duplicate IP commonly repeated in a line's description.
     awk '
         {
             sub(/\r$/, "")
-            ip = $1
-            sub(/#.*/, "", ip)
-            sub(/,.*/, "", ip)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", ip)
-            if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print ip
+            line = $0
+            # BestCF feeds wrap the real list with two promotional IPv4
+            # records. They are page metadata, not measured candidates. This
+            # also prevents an IPv6-only feed from appearing usable merely
+            # because its header/footer contains those two IPv4 addresses.
+            if (line ~ /BestCF[.]pages[.]dev/) next
+            while (match(line, /[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/)) {
+                ip = substr(line, RSTART, RLENGTH)
+                before = (RSTART > 1 ? substr(line, RSTART - 1, 1) : "")
+                after = substr(line, RSTART + RLENGTH, 1)
+                # Reject a partial match cut from a longer dotted number.
+                if (before !~ /[0-9.]/ && after !~ /[0-9.]/) print ip
+                line = substr(line, RSTART + RLENGTH)
+            }
         }
     ' "$src" | sort -u > "$temporary"
     : > "$dest"
@@ -136,7 +156,7 @@ preferred_prepare_ip_file() {
     if ! preferred_extract_ips "$body" "$dest"; then
         rm -f "$body" "$dest"
         CFST_ERROR_CODE='PREFERRED_IPS_EMPTY'
-        CFST_ERROR_MESSAGE="优选反代地址未返回可用 IPv4 provider=$provider"
+        CFST_ERROR_MESSAGE="优选反代地址未提取到可用公网 IPv4 provider=$provider（支持 IP、IP:端口及带注释文本）"
         return 1
     fi
     rm -f "$body"

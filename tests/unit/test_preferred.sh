@@ -13,6 +13,7 @@ export CFST_PREFERRED_PROVIDER=auto
 export CFST_PREFERRED_URL_CT='https://example.test/ct?ips=20'
 export CFST_PREFERRED_URL_CU='https://example.test/cu?ips=20'
 export CFST_PREFERRED_URL_CMCC='https://example.test/cmcc?ips=20'
+export CFST_PREFERRED_URL_CUSTOM='https://example.test/custom'
 export CFST_PREFERRED_TIMEOUT=1
 
 cat > "$TMP/bin/jsonfilter" <<'EOF'
@@ -54,6 +55,19 @@ case "$url" in
   *'/ct?ips=20')
     printf '162.159.38.245#CF 电信优选\n8.35.211.130#CF 电信优选\n' > "$out"
     ;;
+  *'/custom')
+    cat > "$out" <<'DATA'
+162.159.198.1:443#BestCF header | BestCF.pages.dev
+104.17.55.152:443#微测优选 | 移动 | HKG | 104.17.55.152
+209.33.161.104:443#HK [优选高速 62.66ms 14.64Mbps]
+172.64.229.199,53.87MB/s,HKG
+<span>104.18.32.247:8443</span>
+127.0.0.1:1234#must be rejected
+10.0.0.1#must be rejected
+[2606:4700:90dc:2a28:411a:ed69:a50e:971e]:443#IPv6 ignored
+999.999.999.999:443#malformed
+DATA
+    ;;
   *)
     exit 22
     ;;
@@ -81,6 +95,21 @@ assert_eq "$(cat "$TMP/curl.count")" 2
 assert_eq "$CFST_PREFERRED_SELECTED_PROVIDER" ct
 true
 
+export CFST_PREFERRED_PROVIDER=custom
+export CFST_TEST_RETRY=0
+: > "$CFST_TEST_CURL_COUNT_FILE"
+preferred_prepare_ip_file '{}' "$TMP/custom-ips"
+assert_eq "$CFST_PREFERRED_SELECTED_PROVIDER" custom
+assert_eq "$(wc -l < "$TMP/custom-ips" | tr -d ' ')" 4
+assert_contains "$(cat "$TMP/custom-ips")" '104.17.55.152'
+assert_contains "$(cat "$TMP/custom-ips")" '209.33.161.104'
+assert_contains "$(cat "$TMP/custom-ips")" '172.64.229.199'
+assert_contains "$(cat "$TMP/custom-ips")" '104.18.32.247'
+case "$(cat "$TMP/custom-ips")" in
+    *127.0.0.1*|*10.0.0.1*|*999.999.999.999*|*2606:*) fail 'custom parser retained an invalid address' ;;
+esac
+
+export CFST_PREFERRED_PROVIDER=auto
 export CFST_TEST_ISP=''
 set +e
 preferred_prepare_ip_file '{}' "$TMP/no-ips"

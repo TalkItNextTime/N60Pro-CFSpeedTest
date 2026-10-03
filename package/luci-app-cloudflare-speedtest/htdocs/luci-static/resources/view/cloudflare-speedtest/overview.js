@@ -906,7 +906,7 @@ function buildConfigMap(view, summary) {
 
 	o = bindPreferredOption(s.taboption('sources', form.Value, 'url_custom', _('自定义优选 URL')));
 	o.placeholder = _('填写返回 IPv4 地址列表的 URL');
-	o.description = _('URL 应返回 IPv4 地址，每行一个 IP；也支持文本中包含 IP 的格式。');
+	o.description = _('兼容纯 IP、IP:端口、# 注释、逗号/空格分列及 BestCF 等文本格式；会提取全部公网 IPv4、去重并忽略 IPv6/内网地址。');
 
 	o = bindPreferredOption(s.taboption('sources', form.Value, 'timeout', _('优选 URL 超时（秒）')));
 	o.datatype = 'and(uinteger,min(1),max(60))';

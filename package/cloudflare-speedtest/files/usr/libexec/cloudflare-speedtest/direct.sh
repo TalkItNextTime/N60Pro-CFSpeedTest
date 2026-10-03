@@ -71,17 +71,17 @@ direct_enable() {
         cfst_log warn 'direct_mode could not create the nftables table'
         return 0
     }
-    _direct_nft add set inet "$CFST_DIRECT_TABLE" dst4 '{ type ipv4_addr ; }' &&
-    _direct_nft add chain inet "$CFST_DIRECT_TABLE" mark_out \
-        '{ type route hook output priority mangle ; policy accept ; }' &&
-    _direct_nft add rule inet "$CFST_DIRECT_TABLE" mark_out \
-        meta skuid "$uid" meta mark set "$CFST_DIRECT_MARK" &&
-    _direct_nft add rule inet "$CFST_DIRECT_TABLE" mark_out \
-        ip daddr @dst4 meta mark set "$CFST_DIRECT_MARK" || {
+    if ! _direct_nft add set inet "$CFST_DIRECT_TABLE" dst4 '{ type ipv4_addr ; }' ||
+       ! _direct_nft add chain inet "$CFST_DIRECT_TABLE" mark_out \
+            '{ type route hook output priority mangle ; policy accept ; }' ||
+       ! _direct_nft add rule inet "$CFST_DIRECT_TABLE" mark_out \
+            meta skuid "$uid" meta mark set "$CFST_DIRECT_MARK" ||
+       ! _direct_nft add rule inet "$CFST_DIRECT_TABLE" mark_out \
+            ip daddr @dst4 meta mark set "$CFST_DIRECT_MARK"; then
         cfst_log warn 'direct_mode could not install the marking rules'
         _direct_nft delete table inet "$CFST_DIRECT_TABLE"
         return 0
-    }
+    fi
     # nat chains must sit above -200; -190 still runs before dstnat (-100) and
     # the proxies' output chains (around -1).
     if _direct_nft add chain inet "$CFST_DIRECT_TABLE" nat_out \

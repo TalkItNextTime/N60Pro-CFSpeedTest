@@ -72,8 +72,9 @@ stop_orphan_runs() {
     _orphan_found=1
     for _orphan_pid in $(pgrep -f 'cloudflare-speedtest run --mode' 2>/dev/null || true); do
         case "$_orphan_pid" in
-            ''|*[!0-9]*|$$) continue ;;
+            ''|*[!0-9]*) continue ;;
         esac
+        [ "$_orphan_pid" = "$$" ] && continue
         stop_process_tree "$_orphan_pid"
         sleep 1
         if kill -0 "$_orphan_pid" 2>/dev/null; then
